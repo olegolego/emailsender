@@ -171,6 +171,15 @@ td.r, th.r { text-align: right; }
 td.note { font-size: 13px; max-width: 260px; cursor: text; white-space: pre-wrap; }
 td.note:hover { background: var(--soft); }
 
+/* forms page */
+.flist { display: grid; }
+.frow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: center; padding: 13px 4px; border-top: 1px solid var(--line); }
+.frow:first-child { border-top: none; }
+.frow.opened { background: var(--accent-soft); border-radius: 10px; }
+.flink { font-weight: 600; font-size: 15px; word-break: break-all; }
+.fact { display: flex; gap: 6px; align-items: center; }
+.fnote { margin-top: 4px; max-width: 640px; }
+
 /* batch cards */
 .bcard { display: block; color: inherit; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; background: #fff; box-shadow: var(--shadow-sm); transition: box-shadow .15s, border-color .15s; }
 .bcard:hover { text-decoration: none; border-color: var(--line-2); box-shadow: var(--shadow); }

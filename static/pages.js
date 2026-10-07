@@ -494,6 +494,72 @@ ROUTES.companies = async function () {
   load();
 };
 
+// ================================================================ FORMS (fill by hand with the Autofill extension)
+ROUTES.forms = async function () {
+  const st = { fs: sessionStorage.getItem("ffs") || "todo", q: "", page: 0, source: "" };
+  const shortUrl = (u) => { try { const x = new URL(u); return x.hostname.replace(/^www\./, "") + (x.pathname.length > 1 ? x.pathname.slice(0, 40) + (x.pathname.length > 40 ? "…" : "") : ""); } catch (e) { return u; } };
+  const counts = await api("/forms/counts");
+  page().innerHTML = `
+    <div class="head"><div><h1>Forms</h1><div class="sub">Suppliers with a wholesale form on their site. Click a form, press the Eigenreach Autofill icon, check, submit - then mark it ✓.</div></div>
+      <div class="actions"><button class="primary big" id="f-next">▶ Open next form</button></div></div>
+    <div class="tiles" style="grid-template-columns:repeat(3,minmax(0,1fr))">
+      <div class="tile"><div class="l">To fill</div><div class="v">${counts.todo || 0}</div></div>
+      <div class="tile"><div class="l">Submitted</div><div class="v" style="color:var(--good)">${counts.submitted || 0}</div></div>
+      <div class="tile"><div class="l">Couldn't submit</div><div class="v">${counts.not_possible || 0}</div></div>
+    </div>
+    <div class="card"><div class="card-head"><div class="seg" id="f-tabs">${[["todo", "To fill"], ["submitted", "Submitted"], ["not_possible", "Couldn't"]].map(([k, l]) => `<a href="#" data-fs="${k}" class="${k === st.fs ? "active" : ""}">${l}</a>`).join("")}</div>
+      <div class="right"><input id="f-q" placeholder="Search site…" style="width:220px"></div></div>
+      <div id="f-list"></div></div>`;
+  let rows = [];
+  const load = async () => {
+    const d = await api(`/companies/list?fs=${st.fs}&q=${encodeURIComponent(st.q)}&page=${st.page}`);
+    rows = d.rows;
+    const pages = Math.ceil(d.total / 100);
+    $("#f-list").innerHTML = rows.length ? `<div class="flist">${rows.map((r) => `
+      <div class="frow" data-row="${r.id}">
+        <div class="fmain">
+          <a class="flink" href="${esc(r.form_url)}" target="_blank" rel="noopener" data-open="${r.id}">${esc(shortUrl(r.form_url))} ↗</a>
+          <div class="muted" style="font-size:12.5px">${esc(r.domain)} · ${esc(r.source)}${r.email ? " · " + esc(r.email) : ""}${/\.pdf($|\?)/i.test(r.form_url) ? ' · <span class="pill warn">PDF - download &amp; fill</span>' : ""}</div>
+          <div class="note fnote" data-note="${r.id}">${r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>'}</div>
+        </div>
+        <div class="fact">${st.fs === "todo"
+          ? `<a class="btn sm primary" href="${esc(r.form_url)}" target="_blank" rel="noopener" data-open="${r.id}">Fill form ↗</a><button class="sm" data-fset="${r.id}" data-v="submitted">✓ Submitted</button><button class="sm ghost" data-fset="${r.id}" data-v="not_possible">Can't</button>`
+          : `<button class="sm ghost" data-fset="${r.id}" data-v="">↺ Back to “to fill”</button>`}</div>
+      </div>`).join("")}</div>
+      ${pages > 1 ? `<div class="row" style="justify-content:center;margin-top:12px"><button class="sm" id="f-prev" ${st.page ? "" : "disabled"}>← Prev</button><span class="muted">Page ${st.page + 1} of ${pages} · ${d.total} forms</span><button class="sm" id="f-nextp" ${st.page + 1 < pages ? "" : "disabled"}>Next →</button></div>` : `<div class="muted" style="text-align:center;margin-top:10px">${d.total} forms</div>`}`
+      : `<div class="empty">Nothing here.</div>`;
+    $$("[data-open]").forEach((a) => a.addEventListener("click", () => a.closest(".frow").classList.add("opened")));
+    $$("[data-fset]").forEach((b) => (b.onclick = async () => {
+      await act(() => api(`/companies/${b.dataset.fset}/form`, "POST", { status: b.dataset.v }), b.dataset.v === "submitted" ? "✓ Marked as submitted" : b.dataset.v ? "Marked as couldn't submit" : "Back to “to fill”");
+      b.closest(".frow").remove();
+    }));
+    const byId = Object.fromEntries(rows.map((r) => [r.id, r]));
+    $$("[data-note]", $("#f-list")).forEach((td) => (td.onclick = () => {
+      if (td.querySelector("textarea")) return;
+      const r = byId[td.dataset.note];
+      td.innerHTML = `<textarea rows="2" style="width:100%;font-size:13px" placeholder="e.g. registered, password in 1Password; waiting for approval">${esc(r.notes || "")}</textarea>`;
+      const ta = td.querySelector("textarea"); ta.focus();
+      ta.onblur = async () => { const v = ta.value.trim(); if (v !== (r.notes || "")) { await act(() => api(`/companies/${r.id}/note`, "POST", { note: v }), "Note saved"); r.notes = v; } td.innerHTML = r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>'; };
+      ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } };
+    }));
+    const pv = $("#f-prev"), nx = $("#f-nextp");
+    if (pv) pv.onclick = () => { st.page--; load(); };
+    if (nx) nx.onclick = () => { st.page++; load(); };
+  };
+  $("#f-next").onclick = () => {
+    const next = $$(".frow").find((el) => !el.classList.contains("opened"));
+    if (!next) return toast("No more forms on this page");
+    const a = next.querySelector("a.flink");
+    window.open(a.href, "_blank", "noopener");
+    next.classList.add("opened");
+    next.scrollIntoView({ behavior: "smooth", block: "center" });
+  };
+  $$("#f-tabs a").forEach((a) => (a.onclick = (e) => { e.preventDefault(); st.fs = a.dataset.fs; st.page = 0; sessionStorage.setItem("ffs", st.fs); $$("#f-tabs a").forEach((x) => x.classList.toggle("active", x === a)); load(); }));
+  let t;
+  $("#f-q").oninput = (e) => { clearTimeout(t); t = setTimeout(() => { st.q = e.target.value; st.page = 0; load(); }, 300); };
+  load();
+};
+
 // ================================================================ SETTINGS
 ROUTES.settings = async function () {
   const [s, accs] = await Promise.all([api("/settings"), api("/accounts")]);

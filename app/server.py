@@ -1193,6 +1193,11 @@ def companies_list():
         like = f"%{request.args['q'].lower()}%"
         where.append("(co.domain LIKE ? OR EXISTS (SELECT 1 FROM contacts c WHERE c.company_id=co.id AND c.email LIKE ?))")
         args += [like, like]
+    fs = request.args.get("fs")
+    if fs is not None and fs in ("todo", "submitted", "not_possible"):
+        where.append("co.plan='form'")
+        where.append("COALESCE(co.form_status,'')=?")
+        args.append("" if fs == "todo" else fs)
     st = request.args.get("status") or ""
     groups = {"email": "('ready','not_in_batch','scheduled','emailing','no_reply')",
               "replied": "('replied','interested','bounced')", "forms": "('form_todo','form_submitted','form_not_possible')",
@@ -1208,8 +1213,10 @@ def companies_list():
     outer = f"SELECT * FROM ({inner}) t" + (f" WHERE st IN {groups[st]}" if st in groups else "")
     total = db.scalar(f"SELECT COUNT(*) FROM ({outer})", tuple(args))
     page = max(0, int(request.args.get("page") or 0))
-    rows = db.q(outer + " ORDER BY CASE WHEN last_ts IS NULL THEN 1 ELSE 0 END, last_ts DESC, domain LIMIT 100 OFFSET ?",
-                tuple(args) + (page * 100,))
+    order = ("CASE source WHEN 'Paid catalogs' THEN 1 WHEN 'Astra brand suppliers' THEN 2 WHEN 'SpyFu competitors' THEN 3 "
+             "ELSE 4 END, domain") if fs is not None else \
+        "CASE WHEN last_ts IS NULL THEN 1 ELSE 0 END, last_ts DESC, domain"
+    rows = db.q(outer + f" ORDER BY {order} LIMIT 100 OFFSET ?", tuple(args) + (page * 100,))
     sources = [r["source"] for r in db.q("SELECT DISTINCT source FROM companies WHERE COALESCE(source,'')<>'' ORDER BY source")]
     return jsonify({"total": total, "rows": rows, "sources": sources})
 
@@ -1218,6 +1225,12 @@ def companies_list():
 def company_note(cid):
     db.update("companies", cid, {"notes": (body().get("note") or "").strip()[:2000], "updated_at": db.now_iso()})
     return ok()
+
+
+@app.get("/api/forms/counts")
+def forms_counts():
+    rows = db.q("SELECT COALESCE(form_status,'') AS fs, COUNT(*) AS n FROM companies WHERE plan='form' GROUP BY 1")
+    return jsonify({("todo" if r["fs"] == "" else r["fs"]): r["n"] for r in rows})
 
 
 @app.post("/api/companies/<int:cid>/form")
