@@ -1,0 +1,4 @@
+flask>=3.1
+anthropic>=1.11
+keyring>=25
+waitress>=3

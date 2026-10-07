@@ -1,0 +1,17 @@
+# environment
+.venv/
+__pycache__/
+*.pyc
+
+# private data: database, backups, logs, secrets - never commit
+data/
+*.db
+*.sqlite
+*.sqlite-*
+*.log
+.secrets.json
+*.xlsx
+*.csv
+
+# macOS
+.DS_Store
