@@ -32,10 +32,10 @@ def check_inbox():
                 folders.append(spam)
             for folder in folders:
                 try:
-                    items, mark = mailer.fetch_new(acc, folder)
+                    items, mark = mailer.fetch_new(acc, folder, wanted=engine.wants_header)
                     for uid, raw in items:
                         try:
-                            if engine.process_inbound(acc, raw, folder):
+                            if raw is not None and engine.process_inbound(acc, raw, folder):
                                 found += 1
                         except Exception as ex:
                             errors.append(f"{acc['email']} uid {uid}: {ex}")
@@ -51,6 +51,16 @@ def check_inbox():
     finally:
         status["inbox_checking"] = False
         _inbox_lock.release()
+
+
+def _check_inbox_thread():
+    try:
+        check_inbox()
+    except Exception as ex:
+        status["last_error"] = f"{db.now_iso()} inbox: {ex}"
+        traceback.print_exc()
+    finally:
+        db.close()
 
 
 def daily_summary():
@@ -87,11 +97,12 @@ def loop():
             engine.process_due()
             engine.send_due()
             interval = float(db.get_setting("imap_interval_minutes") or 2) * 60
-            if _inbox_requested or time.time() - last_inbox >= interval:
+            if (_inbox_requested or time.time() - last_inbox >= interval) and not _inbox_lock.locked():
                 _inbox_requested = False
                 last_inbox = time.time()
                 if db.q1("SELECT id FROM accounts WHERE active=1"):
-                    check_inbox()
+                    # own thread: a slow mailbox must never hold up sending
+                    threading.Thread(target=_check_inbox_thread, name="emailmanager-inbox", daemon=True).start()
             daily_summary()
         except Exception as ex:
             status["last_error"] = f"{db.now_iso()} {ex}"

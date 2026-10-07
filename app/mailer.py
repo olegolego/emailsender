@@ -135,9 +135,15 @@ def spam_folder(account):
     return name
 
 
-def fetch_new(account, folder):
-    """Returns [(uid, raw_bytes)] for messages not seen before in this folder. Never marks mail as read.
-    The caller stores progress with mark_seen() after each message is safely processed."""
+HEADER_FIELDS = ("FROM REPLY-TO SUBJECT MESSAGE-ID IN-REPLY-TO REFERENCES LIST-UNSUBSCRIBE LIST-ID PRECEDENCE "
+                 "AUTO-SUBMITTED CONTENT-TYPE X-FAILED-RECIPIENTS")
+
+
+def fetch_new(account, folder, wanted=None, max_bodies=100):
+    """Returns [(uid, raw_bytes or None)] for messages not seen before in this folder, oldest first.
+    Headers of all new messages are read in one go; the full email is downloaded only when wanted(header_bytes)
+    says so (None = skipped, e.g. Russian or newsletter). Never marks mail as read.
+    The caller stores progress with mark_seen() after each message is processed."""
     key = f"_imap:{account['id']}:{folder}"
     state = db.get_setting(key) or {}
     m = _imap(account)
@@ -154,15 +160,32 @@ def fetch_new(account, folder):
             typ, data = m.uid("search", None, "SINCE", since)
         else:
             typ, data = m.uid("search", None, "UID", f"{int(last_uid) + 1}:*")
-        uids = [int(u) for u in (data[0] or b"").split()] if typ == "OK" else []
+        uids = sorted(int(u) for u in (data[0] or b"").split()) if typ == "OK" else []
         if last_uid is not None:
             uids = [u for u in uids if u > int(last_uid)]
-        out = []
-        for uid in uids[:200]:
-            typ, msg_data = m.uid("fetch", str(uid), "(BODY.PEEK[])")
-            if typ != "OK" or not msg_data or not isinstance(msg_data[0], tuple):
+        headers = {}
+        for i in range(0, len(uids), 100):
+            chunk = ",".join(str(u) for u in uids[i:i + 100])
+            typ, resp = m.uid("fetch", chunk, f"(BODY.PEEK[HEADER.FIELDS ({HEADER_FIELDS})])")
+            for item in resp or []:
+                if isinstance(item, tuple):
+                    mu = re.search(rb"UID (\d+)", item[0])
+                    if mu:
+                        headers[int(mu.group(1))] = item[1]
+        out, bodies = [], 0
+        for uid in uids:
+            hdr = headers.get(uid, b"")
+            if wanted is not None and hdr and not wanted(hdr):
+                out.append((uid, None))
                 continue
-            out.append((uid, msg_data[0][1]))
+            if bodies >= max_bodies:
+                break  # the rest next time; progress stops here so nothing is skipped
+            typ, msg_data = m.uid("fetch", str(uid), "(BODY.PEEK[])")
+            bodies += 1
+            if typ == "OK" and msg_data and isinstance(msg_data[0], tuple):
+                out.append((uid, msg_data[0][1]))
+            else:
+                out.append((uid, None))
         if not uids:
             max_uid = int(last_uid or 0)
             if last_uid is None:

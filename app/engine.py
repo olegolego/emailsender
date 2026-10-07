@@ -618,6 +618,56 @@ def purge_filtered_inbound():
     return removed
 
 
+def company_for_domain(dom):
+    """A company in our lists that this email domain belongs to: its website, a contact's email, or its form's website."""
+    if not dom or dom in FREEMAIL:
+        return None
+    return (db.q1("SELECT * FROM companies WHERE domain=?", (dom,))
+            or db.q1("SELECT co.* FROM companies co JOIN contacts c ON c.company_id=co.id WHERE c.email LIKE ? LIMIT 1",
+                     ("%@" + dom,))
+            or db.q1("SELECT * FROM companies WHERE form_url LIKE ? OR form_url LIKE ? OR form_url LIKE ? "
+                     "OR form_url LIKE ? LIMIT 1",
+                     (f"%//{dom}/%", f"%//www.{dom}/%", f"%//{dom}", f"%//www.{dom}")))
+
+
+def wants_header(raw_hdr):
+    """Cheap decision from headers only: is this email worth downloading? Mirrors process_inbound's rules."""
+    import email as _email
+    import email.policy as _policy
+    from email.utils import parseaddr
+    h = _email.message_from_bytes(raw_hdr, policy=_policy.default)
+    mid = str(h.get("Message-ID", "")).strip()
+    if mid and db.scalar("SELECT COUNT(*) FROM messages WHERE message_id=? AND direction='in'", (mid,)):
+        return False
+    frm = parseaddr(str(h.get("From", "")))[1].lower()
+    rt = parseaddr(str(h.get("Reply-To", "")))[1].lower()
+    if rt and rt != frm and mailer.is_automated_sender(frm) and not mailer.is_automated_sender(rt):
+        frm = rt
+    if frm in _our_addresses():
+        return False
+    if "mailer-daemon" in frm or frm.startswith("postmaster@") or h.get_content_type() == "multipart/report" \
+            or h.get("X-Failed-Recipients"):
+        return True  # possible bounce of one of our emails
+    if _ignored(frm):
+        return False
+    ids = set(mailer.MSGID_RE.findall(f"{h.get('In-Reply-To', '')} {h.get('References', '')}"))
+    if ids:
+        ph = ",".join("?" for _ in ids)
+        if db.scalar(f"SELECT COUNT(*) FROM messages WHERE direction='out' AND message_id IN ({ph})", tuple(ids)):
+            return True
+    if db.scalar("SELECT COUNT(*) FROM contacts WHERE email=?", (frm,)):
+        return True
+    if company_for_domain(frm.split("@")[-1]):
+        return True
+    if mailer.is_russian(str(h.get("Subject", "")), ""):
+        return False
+    auto = str(h.get("Auto-Submitted", "")).lower()
+    if h.get("List-Unsubscribe") or h.get("List-Id") or (auto and auto != "no") \
+            or str(h.get("Precedence", "")).lower() in ("bulk", "list", "junk") or mailer.is_automated_sender(frm):
+        return False
+    return True
+
+
 def process_inbound(account, raw, folder):
     p = mailer.parse(raw)
     if p["message_id"] and db.scalar("SELECT COUNT(*) FROM messages WHERE message_id=? AND direction='in'", (p["message_id"],)):
@@ -654,12 +704,7 @@ def process_inbound(account, raw, folder):
         if not contact:
             # Any company already in our lists (emailed, form filled, or just imported): always keep its mail -
             # welcome emails, application confirmations and approvals often look automated.
-            dom = p["from_addr"].split("@")[-1]
-            co = None
-            if dom not in FREEMAIL:
-                co = db.q1("SELECT * FROM companies WHERE domain=?", (dom,)) or \
-                    db.q1("SELECT co.* FROM companies co JOIN contacts c ON c.company_id=co.id "
-                          "WHERE c.email LIKE ? LIMIT 1", ("%@" + dom,))
+            co = company_for_domain(p["from_addr"].split("@")[-1])
             if co:
                 first, _, last = (p["from_name"] or "").partition(" ")
                 cid = upsert_contact({"email": p["from_addr"], "first_name": first, "last_name": last,

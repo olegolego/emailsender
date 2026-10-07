@@ -172,7 +172,10 @@ def write_email(instructions, variables):
 _RULES = [
     ("out_of_office", r"out of (the )?office|on vacation|on leave|away (from|until)|limited access to email|"
                       r"currently out|i am away|i'm away|return(ing)? on|back in the office"),
-    ("unsubscribe", r"unsubscribe|remove me|stop (emailing|contacting|sending)|take me off|do not contact|opt.?out"),
+    ("interested", r"welcome to (team )?|your (wholesale |dealer |reseller )?(account|application) (has been |is |was )?(approved|activated|created|open)|"
+                   r"(application|account) (has been |was )?approved|you(\'| a)re (now )?approved"),
+    ("unsubscribe", r"unsubscribe me|please unsubscribe|remove me|take me off|stop (emailing|contacting|sending)|"
+                    r"do not (email|contact)|don\'t (email|contact)|opt me out"),
     ("not_interested", r"not interested|no thank|not at this time|not a fit|not taking (on )?new|"
                        r"we (do not|don't) (work|sell) with|unable to (help|assist|open)|decline"),
     ("referral", r"(reach out|contact|email) (to )?(our|my colleague|the)|forward(ed)? (this|your)|"
