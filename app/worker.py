@@ -26,7 +26,11 @@ def check_inbox():
     try:
         found, errors = 0, []
         for acc in db.q("SELECT * FROM accounts WHERE active=1"):
-            for folder in [f.strip() for f in (acc["imap_folders"] or "INBOX").split(",") if f.strip()]:
+            folders = [f.strip() for f in (acc["imap_folders"] or "INBOX").split(",") if f.strip()]
+            spam = mailer.spam_folder(acc)  # supplier replies often land in Spam
+            if spam and spam not in folders:
+                folders.append(spam)
+            for folder in folders:
                 try:
                     items, mark = mailer.fetch_new(acc, folder)
                     for uid, raw in items:

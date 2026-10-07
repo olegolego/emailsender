@@ -520,6 +520,10 @@ ROUTES.settings = async function () {
       <label class="field" style="margin-top:12px;max-width:380px"><span>Phone alerts (optional): ntfy topic</span><input data-k="notify_ntfy_topic" value="${esc(s.notify_ntfy_topic)}" placeholder="a long random name"></label>
       <div class="hint" style="margin-top:6px">Install the free “ntfy” app on your phone and subscribe to the same topic name.</div></div>
 
+    <div class="card"><h2 style="margin-bottom:6px">Ignored senders</h2>
+      <div class="hint" style="margin-bottom:10px">Emails from these addresses never show up in Replies (added when you delete a conversation with “ignore” ticked).</div>
+      <div id="ign"></div></div>
+
     <div class="card"><h2 style="margin-bottom:12px">Claude (reads and summarises replies)</h2>
       <div class="row"><input type="password" id="ai-key" style="min-width:340px" placeholder="${s.anthropic_key_set ? "API key saved ✓ (paste to replace)" : "Anthropic API key: sk-ant-…"}">
         <button id="ai-save">Save key</button><button class="ghost" id="ai-test">Test</button><span class="hint" id="ai-out"></span></div>
@@ -530,6 +534,12 @@ ROUTES.settings = async function () {
   $("#n-test").onclick = () => act(() => api("/notifications/test", "POST"), "Sent - check your Mac");
   $("#ai-save").onclick = async () => { const v = $("#ai-key").value.trim(); if (!v) return toast("Paste a key first"); await act(() => api("/settings", "POST", { anthropic_api_key: v }), "Key saved"); ROUTES.settings(); };
   $("#ai-test").onclick = async () => { $("#ai-out").textContent = "Asking Claude…"; try { const r = await api("/settings/test-ai", "POST"); $("#ai-out").textContent = `✓ ${r.analysis.category}: ${r.analysis.summary}`; } catch (e) { $("#ai-out").textContent = "✗ " + e.message; } };
+  const drawIgn = async () => {
+    const list = await api("/ignored-senders");
+    $("#ign").innerHTML = list.length ? list.map((x, i) => `<div class="row" style="padding:5px 0;border-top:${i ? "1px solid var(--line)" : "none"}"><span class="grow">${esc(x)}</span><button class="sm ghost" data-unign="${esc(x)}">Stop ignoring</button></div>`).join("") : `<span class="muted">Nobody is ignored.</span>`;
+    $$("[data-unign]").forEach((b) => (b.onclick = async () => { await act(() => api("/ignored-senders", "POST", { list: list.filter((x) => x !== b.dataset.unign) }), "Emails from " + b.dataset.unign + " will show again"); drawIgn(); }));
+  };
+  drawIgn();
   $("#acc-add").onclick = () => mailboxForm({});
   $$("[data-edit]").forEach((b) => (b.onclick = () => mailboxForm(accs.find((a) => a.id == b.dataset.edit))));
   $$("[data-del]").forEach((b) => (b.onclick = async () => { if (!confirm("Remove this mailbox?")) return; const r = await act(() => api("/accounts/" + b.dataset.del, "DELETE")); toast(r.note || "Removed"); ROUTES.settings(); refreshState(); }));

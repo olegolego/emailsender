@@ -106,7 +106,33 @@ def test_imap(account):
 
 
 def _quote_folder(name):
+    name = name.strip().strip('"')
     return '"' + name.replace('"', '\\"') + '"'
+
+
+_SPAM = {}
+
+
+def spam_folder(account):
+    """Name of the Gmail Spam folder (localised, e.g. Russian UI), found via the \\Junk flag; cached per account."""
+    if account["id"] in _SPAM:
+        return _SPAM[account["id"]]
+    name = None
+    try:
+        m = _imap(account)
+        try:
+            typ, folders = m.list()
+            for f in folders or []:
+                line = f.decode(errors="ignore")
+                if "\\Junk" in line:
+                    name = line.split(' "/" ')[-1].strip().strip('"')
+                    break
+        finally:
+            m.logout()
+    except Exception:
+        return None
+    _SPAM[account["id"]] = name
+    return name
 
 
 def fetch_new(account, folder):

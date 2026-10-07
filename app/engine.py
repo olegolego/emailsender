@@ -652,13 +652,18 @@ def process_inbound(account, raw, folder):
     if not contact and not p["is_bounce"]:
         contact = db.q1("SELECT * FROM contacts WHERE email=?", (p["from_addr"],))
         if not contact:
+            # Any company already in our lists (emailed, form filled, or just imported): always keep its mail -
+            # welcome emails, application confirmations and approvals often look automated.
             dom = p["from_addr"].split("@")[-1]
-            co = db.q1("SELECT * FROM companies WHERE domain=?", (dom,)) if dom not in FREEMAIL else None
-            if co and db.scalar("SELECT COUNT(*) FROM messages m JOIN contacts c ON c.id=m.contact_id "
-                                "WHERE c.company_id=? AND m.direction='out'", (co["id"],)):
+            co = None
+            if dom not in FREEMAIL:
+                co = db.q1("SELECT * FROM companies WHERE domain=?", (dom,)) or \
+                    db.q1("SELECT co.* FROM companies co JOIN contacts c ON c.company_id=co.id "
+                          "WHERE c.email LIKE ? LIMIT 1", ("%@" + dom,))
+            if co:
                 first, _, last = (p["from_name"] or "").partition(" ")
                 cid = upsert_contact({"email": p["from_addr"], "first_name": first, "last_name": last,
-                                      "company_id": co["id"], "notes": "Replied from a new address at this company."})
+                                      "company_id": co["id"], "notes": "Wrote from an address at this company."})
                 contact = db.q1("SELECT * FROM contacts WHERE id=?", (cid,))
     if p["is_bounce"] and not contact:
         return None
