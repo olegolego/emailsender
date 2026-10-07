@@ -706,10 +706,10 @@ def process_inbound(account, raw, folder):
     return row_id
 
 
-def analyze_and_route(row_id, route=True):
+def analyze_and_route(row_id, route=True, use_ai=None):
     m = db.q1("SELECT * FROM messages WHERE id=?", (row_id,))
     try:
-        a, source = analyzer.analyze(m)
+        a, source = analyzer.analyze(m, use_ai)
     except Exception as ex:
         a, source = analyzer.rules(m), "rules"
         a["next_action"] = (a.get("next_action") or "") + f" (Claude unavailable: {str(ex)[:160]})"

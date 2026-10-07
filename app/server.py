@@ -151,7 +151,7 @@ def test_ai():
               "subject": "Re: Wholesale account inquiry", "ts": db.now_iso(), "is_bounce": 0,
               "reply_text": "Hi Oleg, thanks for reaching out. Please fill out our credit application at the link "
                             "below and send your resale certificate. What volume do you expect per month?"}
-    a, src = analyzer.analyze(sample)
+    a, src = analyzer.analyze(sample, use_ai=True)
     return ok(analysis=a, source=src)
 
 
@@ -811,7 +811,12 @@ def set_ignored_senders():
 
 @app.post("/api/messages/<int:mid>/analyze")
 def reanalyze(mid):
-    engine.analyze_and_route(mid, route=False)
+    if not analyzer.ai_available():
+        raise ValueError("Add an Anthropic API key in Settings first.")
+    engine.analyze_and_route(mid, route=False, use_ai=True)
+    m = db.q1("SELECT analysis_source, analysis_json FROM messages WHERE id=?", (mid,))
+    if m["analysis_source"] != "claude":
+        raise RuntimeError("Claude could not analyse this email: " + (json.loads(m["analysis_json"] or "{}").get("next_action") or ""))
     return ok()
 
 
@@ -860,7 +865,7 @@ def export(kind):
                     "LEFT JOIN companies co ON co.id=m.company_id LEFT JOIN pipelines p ON p.id=m.pipeline_id ORDER BY m.ts")
     elif kind == "companies":
         rows = db.q(f"SELECT co.domain, co.website, co.source, co.plan, {COMPANY_STATUS_SQL} AS status, co.form_url, "
-                    f"co.form_status, co.brands, co.category, co.crm_note, "
+                    f"co.form_status, co.brands, co.category, co.notes, "
                     f"(SELECT c.email FROM contacts c WHERE c.company_id=co.id ORDER BY c.id LIMIT 1) AS email "
                     f"FROM companies co WHERE COALESCE(co.plan,'')<>'' ORDER BY co.source, co.domain")
     elif kind == "replies":
@@ -1207,6 +1212,12 @@ def companies_list():
                 tuple(args) + (page * 100,))
     sources = [r["source"] for r in db.q("SELECT DISTINCT source FROM companies WHERE COALESCE(source,'')<>'' ORDER BY source")]
     return jsonify({"total": total, "rows": rows, "sources": sources})
+
+
+@app.post("/api/companies/<int:cid>/note")
+def company_note(cid):
+    db.update("companies", cid, {"notes": (body().get("note") or "").strip()[:2000], "updated_at": db.now_iso()})
+    return ok()
 
 
 @app.post("/api/companies/<int:cid>/form")

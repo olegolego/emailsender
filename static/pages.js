@@ -435,7 +435,7 @@ ROUTES.companies = async function () {
   const REP = ["replied", "interested"];
   const FORM = ["form_todo", "form_submitted", "form_not_possible"];
   page().innerHTML = `
-    <div class="head"><div><h1>Companies</h1><div class="sub">Every supplier from your spreadsheets and where it stands. One company gets one email style - never two. Grey notes show what another team did earlier (background only).</div></div>
+    <div class="head"><div><h1>Companies</h1><div class="sub">Every supplier from your spreadsheets and where it stands. One company gets one email style - never two. Click a note to write your own.</div></div>
       <div class="actions"><a class="btn" href="/api/export/companies.csv">⇩ Export</a></div></div>
     <div class="tiles">
       <div class="tile"><div class="l">To email</div><div class="v">${all(E)}</div><div class="h">${all(["ready"])} waiting in ready batches</div></div>
@@ -455,17 +455,32 @@ ROUTES.companies = async function () {
   const load = async () => {
     const d = await api(`/companies/list?status=${st.status}&source=${encodeURIComponent(st.source)}&q=${encodeURIComponent(st.q)}&page=${st.page}`);
     const pages = Math.ceil(d.total / 100);
-    $("#c-list").innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>Company</th><th>Email</th><th>Status</th><th>Batch / note</th><th>Last activity</th><th></th></tr></thead><tbody>
+    $("#c-list").innerHTML = `<div style="overflow-x:auto"><table><thead><tr><th>Company</th><th>Email</th><th>Status</th><th>Notes</th><th>Last activity</th><th></th></tr></thead><tbody>
       ${d.rows.map((r) => `<tr><td><a href="${esc(r.website || "https://" + r.domain)}" target="_blank">${esc(r.domain)}</a><div class="muted" style="font-size:12px">${esc(r.source)}</div></td>
         <td style="font-size:13.5px"><div class="ell" style="max-width:220px" title="${esc(r.email || "")}">${esc(r.email || "-")}</div></td>
         <td><span class="pill ${CST[r.st]?.[1] ?? ""}">${esc(CST[r.st]?.[0] ?? r.st)}</span></td>
-        <td class="muted" style="font-size:12.5px;max-width:240px">${r.batch ? esc(r.batch) : ""}${r.crm_note ? `<div class="ell" style="max-width:240px" title="${esc(r.crm_note)}">${esc(r.crm_note)}</div>` : ""}</td>
+        <td class="note" data-note="${r.id}" title="Click to edit">${r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>'}</td>
         <td class="muted" style="font-size:13px;white-space:nowrap">${r.last_ts ? when(r.last_ts) : "-"}</td>
         <td class="r" style="white-space:nowrap">${r.reply_id ? `<a class="btn sm" href="#/replies/${r.reply_id}">Reply</a>` : ""}
           ${r.plan === "form" ? `<a class="btn sm" href="${esc(r.form_url)}" target="_blank">Open form</a>
             ${r.form_status === "submitted" ? `<button class="sm ghost" data-form="${r.id}" data-v="">Undo</button>` : `<button class="sm" data-form="${r.id}" data-v="submitted">✓ Submitted</button><button class="sm ghost" data-form="${r.id}" data-v="not_possible">Can't</button>`}` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="empty">Nothing here.</td></tr>`}
       </tbody></table></div>
       ${pages > 1 ? `<div class="row" style="justify-content:center;margin-top:12px"><button class="sm" id="c-prev" ${st.page ? "" : "disabled"}>← Prev</button><span class="muted">Page ${st.page + 1} of ${pages} · ${d.total} companies</span><button class="sm" id="c-next" ${st.page + 1 < pages ? "" : "disabled"}>Next →</button></div>` : `<div class="muted" style="text-align:center;margin-top:10px">${d.total} companies</div>`}`;
+    const rowsById = Object.fromEntries(d.rows.map((r) => [r.id, r]));
+    $$("[data-note]").forEach((td) => (td.onclick = () => {
+      if (td.querySelector("textarea")) return;
+      const r = rowsById[td.dataset.note];
+      td.innerHTML = `<textarea rows="2" style="min-width:220px;font-size:13px">${esc(r.notes || "")}</textarea>`;
+      const ta = td.querySelector("textarea");
+      ta.focus();
+      const save = async () => {
+        const v = ta.value.trim();
+        if (v !== (r.notes || "")) { await act(() => api(`/companies/${r.id}/note`, "POST", { note: v }), "Note saved"); r.notes = v; }
+        td.innerHTML = r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>';
+      };
+      ta.onblur = save;
+      ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } if (e.key === "Escape") { ta.value = r.notes || ""; ta.blur(); } };
+    }));
     $$("[data-form]").forEach((x) => (x.onclick = async () => { await act(() => api(`/companies/${x.dataset.form}/form`, "POST", { status: x.dataset.v }), x.dataset.v === "submitted" ? "Marked as submitted" : "Updated"); load(); }));
     const pv = $("#c-prev"), nx = $("#c-next");
     if (pv) pv.onclick = () => { st.page--; load(); };
@@ -508,6 +523,7 @@ ROUTES.settings = async function () {
     <div class="card"><h2 style="margin-bottom:12px">Claude (reads and summarises replies)</h2>
       <div class="row"><input type="password" id="ai-key" style="min-width:340px" placeholder="${s.anthropic_key_set ? "API key saved ✓ (paste to replace)" : "Anthropic API key: sk-ant-…"}">
         <button id="ai-save">Save key</button><button class="ghost" id="ai-test">Test</button><span class="hint" id="ai-out"></span></div>
+      <label class="check" style="margin-top:14px"><input type="checkbox" data-k="auto_analyze" ${s.auto_analyze ? "checked" : ""}> Analyse every incoming email with Claude automatically <span class="muted">(uses API credits - off = free keyword sorting, Claude only when you press the button on a reply)</span></label>
       <label class="field" style="margin-top:14px"><span>About your business (helps Claude judge replies and write answers)</span><textarea data-k="business_context" rows="4">${esc(s.business_context)}</textarea></label></div>`;
   const save = (k, v) => act(() => api("/settings", "POST", { [k]: v }), "Saved").then(refreshState);
   $$("[data-k]").forEach((el) => (el.onchange = () => save(el.dataset.k, el.type === "checkbox" ? el.checked : el.value)));

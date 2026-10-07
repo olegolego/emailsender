@@ -168,6 +168,9 @@ td.r, th.r { text-align: right; }
 
 .wlabel { width: 92px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
 
+td.note { font-size: 13px; max-width: 260px; cursor: text; white-space: pre-wrap; }
+td.note:hover { background: var(--soft); }
+
 /* batch cards */
 .bcard { display: block; color: inherit; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; background: #fff; box-shadow: var(--shadow-sm); transition: box-shadow .15s, border-color .15s; }
 .bcard:hover { text-decoration: none; border-color: var(--line-2); box-shadow: var(--shadow); }

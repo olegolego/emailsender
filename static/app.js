@@ -277,7 +277,8 @@ async function showReply(id) {
         <button class="sm ghost danger" id="r-del">Delete</button></div>
       <div class="ai" style="margin-top:16px">
         <div class="row" style="gap:8px">${catPill(m.category)}${a.interest_score != null ? `<span class="muted" style="font-size:13px">Interest</span><span class="meter"><i style="width:${a.interest_score}%"></i></span><b class="num" style="font-size:13px">${a.interest_score}</b>` : ""}
-          <span class="muted" style="margin-left:auto;font-size:12px">${m.analysis_source === "claude" ? "✨ analysed by Claude" : m.analysis_source === "rules" ? "keyword analysis" : ""}</span></div>
+          <span class="muted" style="margin-left:auto;font-size:12px">${m.analysis_source === "claude" ? "✨ analysed by Claude" : "sorted by keywords (free)"}</span>
+          ${m.analysis_source !== "claude" ? `<button class="sm" id="r-ai" data-tip="Uses a little Anthropic credit">✨ Analyse with Claude</button>` : ""}</div>
         <p style="margin:10px 0 0;font-weight:550">${esc(a.summary || "")}</p>
         ${a.requests?.length ? `<div style="margin-top:10px"><h3>They ask for</h3><ul>${a.requests.map((x) => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
         ${a.next_action ? `<div style="margin-top:10px"><h3>Next step</h3>${esc(a.next_action)}</div>` : ""}
@@ -311,6 +312,12 @@ async function showReply(id) {
       toast(`Deleted ${r.deleted} email${r.deleted === 1 ? "" : "s"}${r.resumed ? " · sequence continues" : ""}`);
       dm.close(); history.replaceState(null, "", "#/replies"); refreshState(); route();
     };
+  };
+  const ai = $("#r-ai");
+  if (ai) ai.onclick = async () => {
+    ai.disabled = true; ai.textContent = "Claude is reading…";
+    try { await act(() => api(`/messages/${id}/analyze`, "POST"), "Analysed ✓"); showReply(id); }
+    catch (e) { ai.disabled = false; ai.textContent = "✨ Analyse with Claude"; }
   };
   const sg = $("#r-sug");
   if (sg) sg.onclick = () => { $("#r-text").value = a.suggested_reply; };

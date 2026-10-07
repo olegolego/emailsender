@@ -117,11 +117,14 @@ def _contact_line(msg_row):
             f"company: {c['company_name'] or c['company_domain'] or 'unknown'}")
 
 
-def analyze(msg_row):
-    """Returns (analysis_dict, source) where source is 'claude' or 'rules'."""
+def analyze(msg_row, use_ai=None):
+    """Returns (analysis_dict, source) where source is 'claude' or 'rules'.
+    Claude runs only when asked (button in Replies) or when 'Analyse every email with Claude' is on - it costs credits."""
     if msg_row.get("is_bounce"):
         return rules(msg_row), "rules"
-    if ai_available():
+    if use_ai is None:
+        use_ai = bool(db.get_setting("auto_analyze"))
+    if use_ai and ai_available():
         context = db.get_setting("business_context") or ""
         user = (
             f"Sender of the reply: {_contact_line(msg_row)}\n\n"

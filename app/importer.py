@@ -300,7 +300,7 @@ def apply(order):
                 continue
             existing = cx.execute("SELECT id, form_status FROM companies WHERE domain=?", (r["domain"],)).fetchone()
             fields = {"website": r["website"], "source": SOURCES[r["source"]][0], "plan": r["plan"],
-                      "form_url": r["form_url"], "crm_note": crm_note(r), "crm_row": r["crm_row"],
+                      "form_url": r["form_url"], "crm_note": "", "crm_row": r["crm_row"],
                       "brands": ", ".join(r["brands"][:3]), "category": r["category"], "updated_at": now}
             if existing:
                 cid = existing[0]

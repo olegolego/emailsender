@@ -203,6 +203,7 @@ DEFAULT_SETTINGS = {
     "sending_paused": False,
     "anthropic_model": "claude-sonnet-5-5",
     "ai_enabled": True,
+    "auto_analyze": False,   # Claude on every incoming email costs credits - off; use the button in Replies
     "business_context": (
         "I am Oleg Presnyakov, founder of Eigenreach (eigenreach.com), an e-commerce retailer in "
         "Ann Arbor, Michigan, selling consumer products online since 2021. Our team of mathematicians "
