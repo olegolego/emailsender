@@ -185,6 +185,21 @@ CREATE TABLE IF NOT EXISTS batch_members (
   PRIMARY KEY (batch_id, contact_id)
 );
 CREATE INDEX IF NOT EXISTS ix_bm_contact ON batch_members(contact_id);
+CREATE TABLE IF NOT EXISTS price_lists (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  message_row_id INTEGER,
+  contact_id INTEGER,
+  company_id INTEGER,
+  kind TEXT,                -- file | link
+  filename TEXT DEFAULT '',
+  url TEXT DEFAULT '',
+  path TEXT DEFAULT '',
+  size INTEGER DEFAULT 0,
+  content_type TEXT DEFAULT '',
+  received_at TEXT,
+  status TEXT DEFAULT 'new',   -- new | reviewed | not_price_list
+  notes TEXT DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS notifications (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ts TEXT,

@@ -180,6 +180,8 @@ td.note:hover { background: var(--soft); }
 .fact { display: flex; gap: 6px; align-items: center; }
 .fnote { margin-top: 4px; max-width: 640px; }
 
+.files { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
+
 /* batch cards */
 .bcard { display: block; color: inherit; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; background: #fff; box-shadow: var(--shadow-sm); transition: box-shadow .15s, border-color .15s; }
 .bcard:hover { text-decoration: none; border-color: var(--line-2); box-shadow: var(--shadow); }

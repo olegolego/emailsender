@@ -6,7 +6,7 @@ from datetime import timedelta, datetime, timezone
 from . import db, schedule, templating, mailer, analyzer
 from .notifier import notify
 
-SUPPRESSED = ("bounced", "unsubscribed", "do_not_contact")  # contacted_before is handled in already_reached()
+SUPPRESSED = ("bounced", "unsubscribed", "do_not_contact", "invalid")  # contacted_before is handled in already_reached()
 FREEMAIL = {"gmail.com", "googlemail.com", "yahoo.com", "outlook.com", "hotmail.com", "live.com", "aol.com",
             "icloud.com", "me.com", "proton.me", "protonmail.com", "msn.com", "comcast.net", "gmx.com", "mail.com"}
 SEND_TYPES = ("email", "ai_email")
@@ -486,6 +486,14 @@ def send_item(qid, force=False):
         if item["kind"] == "pipeline" and c and c["status"] in SUPPRESSED:
             db.update("queue", qid, {"status": "cancelled", "error": f"contact is {c['status']}"})
             return False
+        if item["kind"] == "pipeline" and not db.get_setting("test_mode"):
+            from . import verify
+            ok, why = verify.check_domain(item["to_addr"].split("@")[-1])
+            if ok is False:  # guaranteed bounce - don't send, protect eigenreach.com's reputation
+                db.update("queue", qid, {"status": "cancelled", "error": f"not sent: {why}"})
+                if c:
+                    verify.mark_invalid(c["id"], why)
+                return False
         to_addr = item["to_addr"]
         subject = item["subject"]
         test = bool(db.get_setting("test_mode"))
@@ -808,8 +816,42 @@ def process_inbound(account, raw, folder):
     })
     db.log_event("received", contact["id"] if contact else None, enrollment["id"] if enrollment else None, row_id,
                  p["subject"])
+    save_price_lists(row_id, p, contact)
     analyze_and_route(row_id)
     return row_id
+
+
+def save_price_lists(row_id, p, contact):
+    """Files and price-list links from an incoming email go to the Price lists section."""
+    import re as _re
+    if not (p.get("attachments") or p.get("links")):
+        return 0
+    folder = db.DATA_DIR / "attachments" / str(row_id)
+    n = 0
+    for a in p.get("attachments") or []:
+        folder.mkdir(parents=True, exist_ok=True)
+        safe = _re.sub(r"[^\w.\- ()]+", "_", a["filename"])[:120] or "file"
+        path = folder / safe
+        k = 1
+        while path.exists():
+            path = folder / f"{k}-{safe}"
+            k += 1
+        path.write_bytes(a["data"])
+        db.insert("price_lists", {"message_row_id": row_id, "contact_id": contact["id"] if contact else None,
+                                  "company_id": contact["company_id"] if contact else None, "kind": "file",
+                                  "filename": a["filename"], "path": str(path), "size": len(a["data"]),
+                                  "content_type": a["content_type"], "received_at": db.iso(p["ts"])})
+        n += 1
+    for u in p.get("links") or []:
+        db.insert("price_lists", {"message_row_id": row_id, "contact_id": contact["id"] if contact else None,
+                                  "company_id": contact["company_id"] if contact else None, "kind": "link",
+                                  "url": u, "filename": u.split("/")[2] if "//" in u else u,
+                                  "received_at": db.iso(p["ts"])})
+        n += 1
+    if n:
+        who = (contact["email"] if contact else p["from_addr"])
+        notify("interested", f"📎 Price list from {who}", f"{n} file(s)/link(s) - see Price lists", "#/prices", "success")
+    return n
 
 
 def analyze_and_route(row_id, route=True, use_ai=None):

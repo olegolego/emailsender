@@ -271,6 +271,49 @@ def _body_text(msg):
     return html_to_text(payload) if msg.get_content_type() == "text/html" else payload.strip()
 
 
+DOC_EXT = (".pdf", ".xls", ".xlsx", ".xlsm", ".csv", ".numbers", ".zip", ".doc", ".docx", ".txt", ".ods", ".rtf", ".pptx")
+PRICE_WORDS = re.compile(r"price|pricing|catalog|catalogue|line ?sheet|order ?form|wholesale|msrp|map", re.I)
+SHARE_HOSTS = re.compile(r"docs\.google\.com/(spreadsheets|document)|drive\.google\.com|dropbox\.com|1drv\.ms|onedrive|"
+                         r"sharepoint\.com|wetransfer\.com|box\.com/s|we\.tl", re.I)
+URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
+
+
+def _attachments(msg):
+    """Real file attachments (price lists, catalogs, applications) - not inline logos or calendar invites."""
+    out = []
+    for part in msg.iter_attachments():
+        ctype = part.get_content_type()
+        name = part.get_filename() or ""
+        if ctype.startswith("message/") or ctype in ("text/calendar", "application/ics"):
+            continue
+        is_doc = name.lower().endswith(DOC_EXT) or ctype in (
+            "application/pdf", "text/csv", "application/zip", "application/vnd.ms-excel",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if ctype.startswith("image/") and not PRICE_WORDS.search(name):
+            continue  # signature logos, social icons
+        if not is_doc and not ctype.startswith("image/"):
+            continue
+        try:
+            data = part.get_payload(decode=True) or b""
+        except Exception:
+            continue
+        if not data or len(data) > 30_000_000:
+            continue
+        out.append({"filename": name or f"attachment.{ctype.split('/')[-1]}", "content_type": ctype, "data": data})
+    return out
+
+
+def price_links(text):
+    """Links in an email that look like a price list / catalog (Google Sheets, Dropbox, '...price-list.pdf')."""
+    out = []
+    for u in URL_RE.findall(text or ""):
+        u = u.rstrip(".,;")
+        if SHARE_HOSTS.search(u) or (PRICE_WORDS.search(u) and re.search(r"\.(pdf|xlsx?|csv)(\?|$)", u, re.I)):
+            if u not in out:
+                out.append(u)
+    return out[:10]
+
+
 def parse(raw):
     msg = email.message_from_bytes(raw, policy=email.policy.default)
     from_name, from_addr = parseaddr(str(msg.get("From", "")))
@@ -298,7 +341,10 @@ def parse(raw):
             raw_text = raw.decode(errors="ignore")
         except Exception:
             raw_text = body
+    attachments = [] if is_bounce else _attachments(msg)
     return {
+        "attachments": attachments,
+        "links": [] if is_bounce else price_links(body),
         "message_id": str(msg.get("Message-ID", "")).strip(),
         "in_reply_to": str(msg.get("In-Reply-To", "")).strip(),
         "references": refs,

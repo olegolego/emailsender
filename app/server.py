@@ -7,7 +7,7 @@ import random
 import re
 from datetime import timedelta
 
-from flask import Flask, Response, abort, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
 from . import analyzer, db, engine, mailer, schedule, secrets, sequences, stats, templating, worker
 
@@ -100,6 +100,7 @@ def state():
             "sent_today": db.scalar("SELECT COUNT(*) FROM messages WHERE direction='out' AND ts>=? AND ts<?",
                                     (db.iso(start), db.iso(end))),
             "unread_notifications": db.scalar("SELECT COUNT(*) FROM notifications WHERE read=0"),
+            "new_price_lists": db.scalar("SELECT COUNT(*) FROM price_lists WHERE status='new'"),
         },
         "week": s7, "next": nxt, "recent": recent, "now": db.now_iso(),
     })
@@ -712,6 +713,8 @@ def get_message(mid):
     m["analysis"] = json.loads(m["analysis_json"]) if m["analysis_json"] else None
     m["thread"] = db.q("SELECT id, direction, subject, body, reply_text, ts, category, from_addr, to_addr, is_test "
                        "FROM messages WHERE contact_id=? ORDER BY ts", (m["contact_id"],)) if m["contact_id"] else [m]
+    for t in m["thread"]:
+        t["files"] = db.q("SELECT id, kind, filename, url, size FROM price_lists WHERE message_row_id=?", (t["id"],))
     m["contact"] = db.q1("SELECT c.*, co.name AS company FROM contacts c LEFT JOIN companies co ON co.id=c.company_id "
                          "WHERE c.id=?", (m["contact_id"],)) if m["contact_id"] else None
     m["enrollment"] = db.q1("SELECT e.*, p.name AS pipeline FROM enrollments e JOIN pipelines p ON p.id=e.pipeline_id "
@@ -1229,6 +1232,44 @@ def companies_list():
 @app.post("/api/companies/<int:cid>/note")
 def company_note(cid):
     db.update("companies", cid, {"notes": (body().get("note") or "").strip()[:2000], "updated_at": db.now_iso()})
+    return ok()
+
+
+# ---------------------------------------------------------------- price lists (attachments & links in replies)
+
+@app.get("/api/price-lists")
+def price_lists():
+    st = request.args.get("status") or "new"
+    where = "" if st == "all" else "WHERE pl.status=?"
+    rows = db.q(f"SELECT pl.*, m.subject, m.from_addr, m.from_name, co.domain, co.name AS company "
+                f"FROM price_lists pl LEFT JOIN messages m ON m.id=pl.message_row_id "
+                f"LEFT JOIN companies co ON co.id=pl.company_id {where} ORDER BY pl.received_at DESC LIMIT 500",
+                () if st == "all" else (st,))
+    counts = {r["status"]: r["n"] for r in db.q("SELECT status, COUNT(*) AS n FROM price_lists GROUP BY status")}
+    return jsonify({"rows": rows, "counts": counts})
+
+
+@app.get("/api/price-lists/<int:pid>/file")
+def price_list_file(pid):
+    r = db.q1("SELECT * FROM price_lists WHERE id=? AND kind='file'", (pid,))
+    if not r:
+        abort(404)
+    root = (db.DATA_DIR / "attachments").resolve()
+    path = __import__("pathlib").Path(r["path"]).resolve()
+    if root not in path.parents or not path.exists():
+        abort(404)
+    inline = r["content_type"] in ("application/pdf",) or r["content_type"].startswith("image/") or \
+        r["content_type"].startswith("text/")
+    return send_file(path, mimetype=r["content_type"] or None, as_attachment=not inline, download_name=r["filename"])
+
+
+@app.post("/api/price-lists/<int:pid>")
+def update_price_list(pid):
+    d = body()
+    upd = {k: d[k] for k in ("status", "notes") if k in d}
+    if upd.get("status") not in (None, "new", "reviewed", "not_price_list"):
+        raise ValueError("bad status")
+    db.update("price_lists", pid, upd)
     return ok()
 
 

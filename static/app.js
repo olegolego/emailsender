@@ -118,6 +118,8 @@ async function refreshState() {
   const s = STATE, c = s.counts;
   const b = $("#c-replies");
   b.hidden = !c.unhandled; b.textContent = c.unhandled || "";
+  const pb = $("#c-prices");
+  if (pb) { pb.hidden = !c.new_price_lists; pb.textContent = c.new_price_lists || ""; }
   $("#hdr-right").innerHTML = `
     ${s.settings.test_mode ? `<a class="pill warn" href="#/settings" data-tip="Every email goes to ${esc(s.settings.test_address || "your test address")} instead of the real person">Test mode</a>` : ""}
     <button class="sm ${s.settings.sending_paused ? "primary" : ""}" id="btn-pause" data-tip="${s.settings.sending_paused ? "Nothing is being sent" : "Stop every email from going out"}">${s.settings.sending_paused ? "▶ Resume sending" : "⏸ Pause all"}</button>
@@ -287,7 +289,8 @@ async function showReply(id) {
     </div>
     <div class="card"><h3>Conversation</h3><div class="thread">${m.thread.map((t) => `
       <div class="bubble ${t.direction}"><div class="meta"><b>${t.direction === "out" ? "You" : esc(t.from_addr)}</b><span>${when(t.ts)}</span><span>${esc(t.subject)}</span></div>
-      <div class="txt">${esc(t.direction === "in" ? (t.reply_text || t.body) : t.body)}</div></div>`).join("")}</div></div>
+      <div class="txt">${esc(t.direction === "in" ? (t.reply_text || t.body) : t.body)}</div>
+      ${(t.files || []).length ? `<div class="files">${t.files.map((f) => f.kind === "file" ? `<a class="pill info" href="/api/price-lists/${f.id}/file" target="_blank">📎 ${esc(f.filename)}</a>` : `<a class="pill info" href="${esc(f.url)}" target="_blank" rel="noopener">🔗 ${esc(f.filename)}</a>`).join(" ")}</div>` : ""}</div>`).join("")}</div></div>
     <div class="card"><div class="card-head"><h2>Answer</h2><div class="right">${fromPill(acc?.email)}</div></div>
       <textarea id="r-text" rows="8" placeholder="Write your answer…"></textarea>
       <div class="row" style="margin-top:10px">

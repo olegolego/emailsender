@@ -560,6 +560,48 @@ ROUTES.forms = async function () {
   load();
 };
 
+// ================================================================ PRICE LISTS (files & links suppliers sent)
+ROUTES.prices = async function () {
+  const st = { status: sessionStorage.getItem("pls") || "new" };
+  const kindPill = (r) => r.kind === "link" ? `<span class="pill">Link</span>`
+    : /pdf/.test(r.content_type) ? `<span class="pill bad">PDF</span>` : /sheet|excel|csv|numbers|ods/.test(r.content_type + r.filename) ? `<span class="pill good">Excel / CSV</span>`
+    : /zip/.test(r.content_type + r.filename) ? `<span class="pill warn">ZIP</span>` : `<span class="pill">${esc((r.filename.split(".").pop() || "file").toUpperCase())}</span>`;
+  const size = (n) => n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : n > 1e3 ? Math.round(n / 1e3) + " KB" : n ? n + " B" : "";
+  const load = async () => {
+    const d = await api("/price-lists?status=" + st.status);
+    const k = d.counts;
+    page().innerHTML = `
+      <div class="head"><div><h1>Price lists</h1><div class="sub">Files and price-list links that suppliers sent you. Open, review, keep notes.</div></div></div>
+      <div class="card"><div class="card-head"><div class="seg" id="pl-tabs">${[["new", "New", k.new], ["reviewed", "Reviewed", k.reviewed], ["not_price_list", "Not a price list", k.not_price_list], ["all", "All"]].map(([v, l, n]) => `<a href="#" data-pl="${v}" class="${v === st.status ? "active" : ""}">${l}${n ? " · " + n : ""}</a>`).join("")}</div></div>
+      ${d.rows.length ? `<div class="flist">${d.rows.map((r) => `
+        <div class="frow">
+          <div class="fmain">
+            <div class="row" style="gap:8px">${kindPill(r)}
+              ${r.kind === "file" ? `<a class="flink" href="/api/price-lists/${r.id}/file" target="_blank">${esc(r.filename)}</a>` : `<a class="flink" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url.length > 70 ? r.url.slice(0, 70) + "…" : r.url)} ↗</a>`}
+              <span class="muted" style="font-size:12.5px">${size(r.size)}</span></div>
+            <div class="muted" style="font-size:12.5px;margin-top:3px">${esc(r.from_name || r.from_addr || "")}${r.domain ? " · " + esc(r.domain) : ""} · ${when(r.received_at)} · “${esc(r.subject || "")}”</div>
+            <div class="note fnote" data-plnote="${r.id}">${r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>'}</div>
+          </div>
+          <div class="fact">
+            ${r.message_row_id ? `<a class="btn sm ghost" href="#/replies/${r.message_row_id}">Conversation</a>` : ""}
+            ${r.status === "new" ? `<button class="sm" data-pls="${r.id}" data-v="reviewed">✓ Reviewed</button><button class="sm ghost" data-pls="${r.id}" data-v="not_price_list">Not a price list</button>` : `<button class="sm ghost" data-pls="${r.id}" data-v="new">↺ Mark new</button>`}
+          </div>
+        </div>`).join("")}</div>` : `<div class="empty">${st.status === "new" ? "No new price lists. When a supplier sends a file or a price-list link, it shows up here." : "Nothing here."}</div>`}</div>`;
+    $$("[data-pl]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); st.status = a.dataset.pl; sessionStorage.setItem("pls", st.status); load(); }));
+    $$("[data-pls]").forEach((b) => (b.onclick = async () => { await act(() => api(`/price-lists/${b.dataset.pls}`, "POST", { status: b.dataset.v }), "Updated"); refreshState(); load(); }));
+    const byId = Object.fromEntries(d.rows.map((r) => [r.id, r]));
+    $$("[data-plnote]").forEach((td) => (td.onclick = () => {
+      if (td.querySelector("textarea")) return;
+      const r = byId[td.dataset.plnote];
+      td.innerHTML = `<textarea rows="2" style="width:100%;font-size:13px" placeholder="e.g. good margins on SKUs 12-30, min order $500">${esc(r.notes || "")}</textarea>`;
+      const ta = td.querySelector("textarea"); ta.focus();
+      ta.onblur = async () => { const v = ta.value.trim(); if (v !== (r.notes || "")) { await act(() => api(`/price-lists/${r.id}`, "POST", { notes: v }), "Note saved"); r.notes = v; } td.innerHTML = r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>'; };
+      ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } };
+    }));
+  };
+  await load();
+};
+
 // ================================================================ SETTINGS
 ROUTES.settings = async function () {
   const [s, accs] = await Promise.all([api("/settings"), api("/accounts")]);
