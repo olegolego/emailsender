@@ -272,6 +272,9 @@ def render_preview(pid, recipient, account_id):
         body, miss_b = templating.render(s.get("body") or "", vars_)
         if acc and (acc.get("signature") or "").strip():
             body = body.rstrip() + "\n\n" + acc["signature"].strip()
+        footer = (db.get_setting("footer") or "").strip()  # same as engine.render_step: preview = what is sent
+        if footer:
+            body = body.rstrip() + "\n\n" + templating.render(footer, vars_)[0]
         out.append({"subject": subject, "body": body, "missing": sorted(set(miss_s + miss_b)),
                     "wait_days": s.get("wait_days")})
     return out

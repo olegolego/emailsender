@@ -580,6 +580,10 @@ ROUTES.settings = async function () {
       <label class="check"><input type="checkbox" data-k="test_mode" ${s.test_mode ? "checked" : ""}> Send every email to my test address instead of the real person</label>
       <label class="field" style="margin-top:12px;max-width:380px"><span>Test address</span><input data-k="test_address" value="${esc(s.test_address)}"></label></div>
 
+    <div class="card"><h2 style="margin-bottom:6px">Text under every outreach email</h2>
+      <div class="hint" style="margin-bottom:10px">Added after your signature in every batch email. Leave empty unless you really want it (e.g. “Not the right person? Reply ‘unsubscribe’.”). It shows in the batch preview.</div>
+      <textarea data-k="footer" rows="2" placeholder="(empty - nothing is added)">${esc(s.footer || "")}</textarea></div>
+
     <div class="card"><h2 style="margin-bottom:12px">Notifications</h2>
       <div class="row" style="gap:20px"><label class="check"><input type="checkbox" data-k="notify_macos" ${s.notify_macos ? "checked" : ""}> Mac notifications</label>
         <button class="sm" id="n-test">Send a test notification</button></div>
