@@ -132,7 +132,7 @@ async function refreshState() {
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/");
   const r = parts[0] || "home";
-  $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.r === r));
+  $$("#nav a").forEach((a) => a.classList.toggle("active", a.dataset.r === (r === "analysis" ? "prices" : r)));
   clearInterval(refreshTimer);
   tip.style.display = "none";
   page().innerHTML = `<div class="empty">Loading…</div>`;

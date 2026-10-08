@@ -571,7 +571,8 @@ ROUTES.prices = async function () {
     const d = await api("/price-lists?status=" + st.status);
     const k = d.counts;
     page().innerHTML = `
-      <div class="head"><div><h1>Price lists</h1><div class="sub">Files and price-list links that suppliers sent you. Open, review, keep notes.</div></div></div>
+      <div class="head"><div><h1>Price lists</h1><div class="sub">Files and price-list links that suppliers sent you. Open, review, analyse on Amazon with Keepa.</div></div>
+        <div class="actions"><label class="btn" style="cursor:pointer">⇪ Upload price list<input type="file" id="pl-up" hidden accept=".pdf,.xlsx,.xlsm,.csv,.docx,.txt"></label></div></div>
       <div class="card"><div class="card-head"><div class="seg" id="pl-tabs">${[["new", "New", k.new], ["reviewed", "Reviewed", k.reviewed], ["not_price_list", "Not a price list", k.not_price_list], ["all", "All"]].map(([v, l, n]) => `<a href="#" data-pl="${v}" class="${v === st.status ? "active" : ""}">${l}${n ? " · " + n : ""}</a>`).join("")}</div></div>
       ${d.rows.length ? `<div class="flist">${d.rows.map((r) => `
         <div class="frow">
@@ -583,13 +584,25 @@ ROUTES.prices = async function () {
             <div class="note fnote" data-plnote="${r.id}">${r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>'}</div>
           </div>
           <div class="fact">
-            ${r.kind === "file" ? `<button class="sm primary" data-pvf="${r.id}" data-name="${esc(r.filename)}">👁 Preview</button>` : ""}
+            ${r.kind === "file" ? `<button class="sm" data-pvf="${r.id}" data-name="${esc(r.filename)}">👁 Preview</button>` : ""}
+            ${r.kind === "file" ? (r.analysis_id ? `<a class="btn sm primary" href="#/analysis/${r.analysis_id}">📊 Analysis</a>` : `<button class="sm primary" data-an="${r.id}">📊 Analyse</button>`) : ""}
             ${r.message_row_id ? `<a class="btn sm ghost" href="#/replies/${r.message_row_id}">Conversation</a>` : ""}
             ${r.status === "new" ? `<button class="sm" data-pls="${r.id}" data-v="reviewed">✓ Reviewed</button><button class="sm ghost" data-pls="${r.id}" data-v="not_price_list">Not a price list</button>` : `<button class="sm ghost" data-pls="${r.id}" data-v="new">↺ Mark new</button>`}
           </div>
         </div>`).join("")}</div>` : `<div class="empty">${st.status === "new" ? "No new price lists. When a supplier sends a file or a price-list link, it shows up here." : "Nothing here."}</div>`}</div>`;
     $$("[data-pl]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); st.status = a.dataset.pl; sessionStorage.setItem("pls", st.status); load(); }));
     $$("[data-pvf]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); previewFile(a.dataset.pvf, a.dataset.name); }));
+    $$("[data-an]").forEach((b) => (b.onclick = async () => { const r = await act(() => api(`/price-lists/${b.dataset.an}/analyse`, "POST")); location.hash = "#/analysis/" + r.id; }));
+    const up = $("#pl-up");
+    if (up) up.onchange = async () => {
+      const f = up.files[0]; if (!f) return;
+      const fd = new FormData(); fd.append("file", f);
+      const res = await fetch("/api/price-lists/upload", { method: "POST", headers: { "X-EmailManager": "1" }, body: fd });
+      const j = await res.json();
+      if (!j.ok) return toast(j.error || "Upload failed", "error");
+      const r = await act(() => api(`/price-lists/${j.id}/analyse`, "POST"));
+      location.hash = "#/analysis/" + r.id;
+    };
     $$("[data-pls]").forEach((b) => (b.onclick = async () => { await act(() => api(`/price-lists/${b.dataset.pls}`, "POST", { status: b.dataset.v }), "Updated"); refreshState(); load(); }));
     const byId = Object.fromEntries(d.rows.map((r) => [r.id, r]));
     $$("[data-plnote]").forEach((td) => (td.onclick = () => {
@@ -601,6 +614,66 @@ ROUTES.prices = async function () {
       ta.onkeydown = (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); ta.blur(); } };
     }));
   };
+  await load();
+};
+
+// ================================================================ KEEPA ANALYSIS
+ROUTES.analysis = async function (id) {
+  const st = { f: sessionStorage.getItem("anf") || "", sort: sessionStorage.getItem("ans") || "roi" };
+  const $m = (v) => (v == null ? "-" : "$" + Number(v).toFixed(2));
+  const num = (v) => (v == null ? "-" : Number(v).toLocaleString());
+  const draw = (a) => {
+    if (!st.f) st.f = a.found ? "good" : "all";
+    const minRoi = +a.min_roi || 30;
+    const good = a.items.filter((x) => x.roi != null && x.roi >= minRoi);
+    const running = ["queued", "extracting", "looking_up"].includes(a.status);
+    let rows = a.items;
+    if (st.f === "good") rows = good;
+    else if (st.f === "found") rows = rows.filter((x) => x.status === "found" || x.status === "found_name");
+    else if (st.f === "missing") rows = rows.filter((x) => x.status === "not_found" || x.status === "no_code");
+    const key = { roi: (x) => -(x.roi ?? -1e9), profit: (x) => -(x.profit ?? -1e9), sold: (x) => -(x.monthly_sold ?? -1), rank: (x) => x.sales_rank ?? 1e12, row: (x) => x.row_no }[st.sort];
+    rows = [...rows].sort((p, q) => key(p) - key(q));
+    const roiPill = (x) => x.roi == null ? `<span class="muted">-</span>` : `<span class="pill ${x.roi >= minRoi ? "good" : x.roi >= 10 ? "warn" : "bad"}">${x.roi}%</span>`;
+    page().innerHTML = `
+      <a class="back" href="#/prices">← Price lists</a>
+      <div class="head"><div><h1>📊 ${esc(a.title)}</h1><div class="sub">${esc(a.price_list?.domain || a.price_list?.from_addr || a.price_list?.notes || "")}${a.method ? " · items read by " + esc(a.method) : ""}${a.ai_cost ? ` · AI cost $${a.ai_cost.toFixed(3)}` : ""}</div></div>
+        <div class="actions">${(a.status === "needs_key" || a.status === "done" || a.status === "error") && a.with_code ? `<button id="an-keepa">${a.status === "done" ? "↻ Re-run Keepa" : "▶ Run Keepa (by barcode)"}</button>` : ""}
+          ${!running && a.items.some((x) => x.status === "no_code" || x.status === "not_found") ? `<button id="an-name" title="Uses Keepa product search - more tokens per item">🔎 Find ${a.items.filter((x) => x.status === "no_code" || x.status === "not_found").length} by name</button>` : ""}
+          <a class="btn" href="/api/analyses/${a.id}/export.csv">⇩ Export CSV</a></div></div>
+      ${a.message ? `<div class="banner ${a.status === "error" ? "bad" : a.status === "needs_key" ? "warn" : running ? "info" : "good"}">${running ? "⏳ " : ""}${esc(a.message)}${a.status === "needs_key" ? ` <a class="right btn sm" href="#/settings">Add Keepa key</a>` : ""}</div>` : ""}
+      <div class="tiles">
+        <div class="tile"><div class="l">Items in the list</div><div class="v">${a.item_count}</div><div class="h">${a.with_code} with UPC/EAN</div></div>
+        <div class="tile"><div class="l">Found on Amazon</div><div class="v">${a.found}</div><div class="h">${a.keepa_tokens ? a.keepa_tokens + " Keepa tokens used" : "not looked up yet"}${a.keepa_tokens_left != null ? " · " + a.keepa_tokens_left + " left" : ""}</div></div>
+        <div class="tile"><div class="l">Good items (ROI ≥ ${minRoi}%)</div><div class="v" style="color:var(--good)">${good.length}</div><div class="h">after referral + FBA fees</div></div>
+        <div class="tile"><div class="l">Best ROI</div><div class="v">${a.items.reduce((m, x) => Math.max(m, x.roi ?? -1e9), -1e9) > -1e9 ? a.items.reduce((m, x) => Math.max(m, x.roi ?? -1e9), -1e9) + "%" : "-"}</div><div class="h">best monthly sales ${num(a.items.reduce((m, x) => Math.max(m, x.monthly_sold ?? 0), 0))}</div></div>
+      </div>
+      <div class="card"><div class="card-head"><div class="seg">${[["good", `Good · ${good.length}`], ["found", "Found on Amazon"], ["all", "All items"], ["missing", "Not found / no UPC"]].map(([k, l]) => `<a href="#" data-af="${k}" class="${k === st.f ? "active" : ""}">${l}</a>`).join("")}</div>
+        <div class="right"><span class="muted" style="font-size:13px">Sort</span><select id="an-sort">${[["roi", "ROI"], ["profit", "Profit"], ["sold", "Monthly sold"], ["rank", "Sales rank"], ["row", "List order"]].map(([k, l]) => `<option value="${k}" ${k === st.sort ? "selected" : ""}>${l}</option>`).join("")}</select></div></div>
+        ${rows.length ? `<div style="overflow-x:auto"><table class="an"><thead><tr><th>Product</th><th>UPC / EAN</th><th class="r">Cost</th><th class="r">Amazon</th><th class="r">Fees</th><th class="r">Profit</th><th class="r">ROI</th><th class="r">Sold / mo</th><th class="r">Rank</th><th class="r">Offers</th><th></th></tr></thead><tbody>
+          ${rows.map((x) => `<tr>
+            <td style="max-width:300px"><div class="ell" style="max-width:300px;font-weight:550" title="${esc(x.name)}">${esc(x.name || x.amazon_title || "-")}</div>
+              <div class="muted ell" style="font-size:12px;max-width:300px">${[x.brand, x.sku && "SKU " + x.sku, x.case_pack && "pack " + x.case_pack].filter(Boolean).map(esc).join(" · ")}${x.amazon_sells ? ' <span class="pill warn" title="Amazon itself sells this item">Amazon sells</span>' : ""}</div></td>
+            <td class="num" style="font-size:13px">${esc(x.code || "-")}${x.status === "not_found" ? '<div class="muted" style="font-size:11.5px">not on Amazon</div>' : x.status === "no_code" ? '<div class="muted" style="font-size:11.5px">no barcode</div>' : x.status === "found_name" ? '<div><span class="pill warn" title="Found by searching the name - check size / variant">matched by name - check</span></div>' : ""}</td>
+            <td class="r num">${$m(x.cost)}</td>
+            <td class="r num">${$m(x.price)}${x.avg90 ? `<div class="muted" style="font-size:11.5px">90d ${$m(x.avg90)}</div>` : ""}</td>
+            <td class="r num" style="font-size:12.5px">${x.price ? `${x.referral_pct ?? 15}%${x.fba_fee != null ? " + " + $m(x.fba_fee) : ""}` : "-"}</td>
+            <td class="r num" style="${x.profit > 0 ? "color:var(--good)" : x.profit < 0 ? "color:var(--bad)" : ""}">${$m(x.profit)}</td>
+            <td class="r">${roiPill(x)}</td>
+            <td class="r num">${num(x.monthly_sold)}</td>
+            <td class="r num">${num(x.sales_rank)}</td>
+            <td class="r num">${x.offers == null ? "-" : x.offers}${x.offers_fba != null ? `<div class="muted" style="font-size:11.5px">${x.offers_fba} FBA</div>` : ""}</td>
+            <td style="white-space:nowrap">${x.asin ? `<a class="btn sm ghost" href="https://www.amazon.com/dp/${esc(x.asin)}" target="_blank" rel="noopener">Amazon ↗</a><a class="btn sm ghost" href="https://keepa.com/#!product/1-${esc(x.asin)}" target="_blank" rel="noopener">Keepa ↗</a>` : ""}</td></tr>`).join("")}
+        </tbody></table></div>` : `<div class="empty">${running ? "Working on it…" : st.f === "good" ? `No items with ROI ≥ ${minRoi}% yet.` : "Nothing here."}</div>`}
+        <div class="hint" style="margin-top:10px">Amazon price = current Buy Box (or lowest new / FBA price). Profit = price − referral fee (Keepa %, 15% if unknown) − FBA pick &amp; pack fee − your cost. Shipping to Amazon and storage are not included.</div></div>`;
+    $$("[data-af]").forEach((x) => (x.onclick = (e) => { e.preventDefault(); st.f = x.dataset.af; sessionStorage.setItem("anf", st.f); draw(a); }));
+    $("#an-sort").onchange = (e) => { st.sort = e.target.value; sessionStorage.setItem("ans", st.sort); draw(a); };
+    const kb = $("#an-keepa");
+    if (kb) kb.onclick = async () => { await act(() => api(`/analyses/${a.id}/keepa`, "POST"), "Looking up on Keepa…"); load(); };
+    const nb = $("#an-name");
+    if (nb) nb.onclick = async () => { if (!confirm("Search these items on Keepa by name? Each search uses more Keepa tokens than a barcode lookup.")) return; await act(() => api(`/analyses/${a.id}/by-name`, "POST"), "Searching by name…"); load(); };
+    if (running) { clearTimeout(window.__anT); window.__anT = setTimeout(load, 2500); }
+  };
+  const load = async () => { if (!location.hash.startsWith("#/analysis/" + id)) return; draw(await api("/analyses/" + id)); };
   await load();
 };
 
@@ -638,6 +711,12 @@ ROUTES.settings = async function () {
       <div class="hint" style="margin-bottom:10px">Emails from these addresses never show up in Replies (added when you delete a conversation with “ignore” ticked).</div>
       <div id="ign"></div></div>
 
+    <div class="card"><h2 style="margin-bottom:12px">Keepa (Amazon data for price-list analysis)</h2>
+      <div class="row"><input type="password" id="kp-key" style="min-width:340px" placeholder="${s.keepa_key_set ? "Keepa key saved ✓ (paste to replace)" : "Keepa API key"}">
+        <button id="kp-save">Save key</button>
+        <label class="field" style="margin-left:16px"><span>Good item = ROI at least (%)</span><input type="number" data-k="min_roi" value="${s.min_roi ?? 30}" style="width:90px"></label></div>
+      <div class="hint" style="margin-top:6px">Get it at keepa.com → API (paid plan). Each looked-up item costs about 1 Keepa token. Price lists are read for free when they're spreadsheets with clear columns; otherwise Claude Haiku 4.5 (the cheapest model) reads them - usually a few cents per list.</div></div>
+
     <div class="card"><h2 style="margin-bottom:12px">Claude (reads and summarises replies)</h2>
       <div class="row"><input type="password" id="ai-key" style="min-width:340px" placeholder="${s.anthropic_key_set ? "API key saved ✓ (paste to replace)" : "Anthropic API key: sk-ant-…"}">
         <button id="ai-save">Save key</button><button class="ghost" id="ai-test">Test</button><span class="hint" id="ai-out"></span></div>
@@ -646,6 +725,7 @@ ROUTES.settings = async function () {
   const save = (k, v) => act(() => api("/settings", "POST", { [k]: v }), "Saved").then(refreshState);
   $$("[data-k]").forEach((el) => (el.onchange = () => save(el.dataset.k, el.type === "checkbox" ? el.checked : el.value)));
   $("#n-test").onclick = () => act(() => api("/notifications/test", "POST"), "Sent - check your Mac");
+  $("#kp-save").onclick = async () => { const v = $("#kp-key").value.trim(); if (!v) return toast("Paste the Keepa key first"); await act(() => api("/settings", "POST", { keepa_api_key: v }), "Keepa key saved"); ROUTES.settings(); };
   $("#ai-save").onclick = async () => { const v = $("#ai-key").value.trim(); if (!v) return toast("Paste a key first"); await act(() => api("/settings", "POST", { anthropic_api_key: v }), "Key saved"); ROUTES.settings(); };
   $("#ai-test").onclick = async () => { $("#ai-out").textContent = "Asking Claude…"; try { const r = await api("/settings/test-ai", "POST"); $("#ai-out").textContent = `✓ ${r.analysis.category}: ${r.analysis.summary}`; } catch (e) { $("#ai-out").textContent = "✗ " + e.message; } };
   const drawIgn = async () => {

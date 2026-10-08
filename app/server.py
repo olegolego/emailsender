@@ -9,7 +9,7 @@ from datetime import timedelta
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
-from . import analyzer, db, engine, mailer, schedule, secrets, sequences, stats, templating, worker
+from . import analyzer, db, engine, keepa, mailer, schedule, secrets, sequences, stats, templating, worker
 
 STATIC = db.BASE_DIR / "static"
 app = Flask(__name__, static_folder=None)
@@ -128,6 +128,7 @@ SETTING_KEYS = set(db.DEFAULT_SETTINGS)
 def get_settings():
     s = db.all_settings()
     s["anthropic_key_set"] = secrets.has_secret("anthropic_api_key")
+    s["keepa_key_set"] = secrets.has_secret("keepa_api_key")
     s["ai_available"] = analyzer.ai_available()
     return jsonify(s)
 
@@ -140,6 +141,8 @@ def save_settings():
             db.set_setting(k, v)
     if "anthropic_api_key" in d:
         secrets.set_secret("anthropic_api_key", (d["anthropic_api_key"] or "").strip())
+    if "keepa_api_key" in d:
+        secrets.set_secret("keepa_api_key", (d["keepa_api_key"] or "").strip())
     worker.wake()
     return ok()
 
@@ -1241,7 +1244,9 @@ def company_note(cid):
 def price_lists():
     st = request.args.get("status") or "new"
     where = "" if st == "all" else "WHERE pl.status=?"
-    rows = db.q(f"SELECT pl.*, m.subject, m.from_addr, m.from_name, co.domain, co.name AS company "
+    keepa.init()
+    rows = db.q(f"SELECT pl.*, m.subject, m.from_addr, m.from_name, co.domain, co.name AS company, "
+                f"(SELECT a.id FROM analyses a WHERE a.price_list_id=pl.id ORDER BY a.id DESC LIMIT 1) AS analysis_id "
                 f"FROM price_lists pl LEFT JOIN messages m ON m.id=pl.message_row_id "
                 f"LEFT JOIN companies co ON co.id=pl.company_id {where} ORDER BY pl.received_at DESC LIMIT 500",
                 () if st == "all" else (st,))
@@ -1331,6 +1336,76 @@ def update_price_list(pid):
         raise ValueError("bad status")
     db.update("price_lists", pid, upd)
     return ok()
+
+
+# ---------------------------------------------------------------- Keepa analysis of price lists
+
+@app.post("/api/price-lists/upload")
+def upload_price_list():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        raise ValueError("Choose a file.")
+    import re as _re
+    folder = db.DATA_DIR / "attachments" / "uploads" / db.utcnow().strftime("%Y%m%d%H%M%S")
+    folder.mkdir(parents=True, exist_ok=True)
+    safe = _re.sub(r"[^\w.\- ()]+", "_", f.filename)[:120]
+    path = folder / safe
+    f.save(path)
+    pid = db.insert("price_lists", {"kind": "file", "filename": f.filename, "path": str(path), "size": path.stat().st_size,
+                                    "content_type": f.mimetype or "", "received_at": db.now_iso(), "status": "new",
+                                    "notes": (request.form.get("supplier") or "").strip()})
+    return ok(id=pid)
+
+
+@app.post("/api/price-lists/<int:pid>/analyse")
+def analyse_price_list(pid):
+    return ok(id=keepa.start(pid))
+
+
+@app.get("/api/analyses/<int:aid>")
+def get_analysis(aid):
+    keepa.init()
+    a = db.q1("SELECT * FROM analyses WHERE id=?", (aid,))
+    if not a:
+        abort(404)
+    a["price_list"] = db.q1("SELECT pl.id, pl.filename, pl.notes, pl.message_row_id, co.domain, m.from_addr "
+                            "FROM price_lists pl LEFT JOIN companies co ON co.id=pl.company_id "
+                            "LEFT JOIN messages m ON m.id=pl.message_row_id WHERE pl.id=?", (a["price_list_id"],))
+    a["items"] = db.q("SELECT * FROM analysis_items WHERE analysis_id=? ORDER BY row_no", (aid,))
+    a["min_roi"] = db.get_setting("min_roi") or 30
+    a["keepa_key_set"] = secrets.has_secret("keepa_api_key")
+    return jsonify(a)
+
+
+@app.post("/api/analyses/<int:aid>/keepa")
+def analysis_rerun(aid):
+    if not secrets.has_secret("keepa_api_key"):
+        raise ValueError("Add your Keepa API key in Settings first.")
+    keepa.rerun_keepa(aid)
+    return ok()
+
+
+@app.post("/api/analyses/<int:aid>/by-name")
+def analysis_by_name(aid):
+    if not secrets.has_secret("keepa_api_key"):
+        raise ValueError("Add your Keepa API key in Settings first.")
+    keepa.start_by_name(aid)
+    return ok()
+
+
+@app.get("/api/analyses/<int:aid>/export.csv")
+def analysis_export(aid):
+    rows = db.q("SELECT row_no, code AS upc_ean, sku, name, brand, cost, case_pack, msrp, moq, asin, amazon_title, "
+                "price AS amazon_price, avg90 AS avg_price_90d, amazon_sells, sales_rank, monthly_sold, offers, "
+                "offers_fba, referral_pct, fba_fee, profit, roi AS roi_pct, margin AS margin_pct, status "
+                "FROM analysis_items WHERE analysis_id=? ORDER BY roi DESC", (aid,))
+    buf = io.StringIO()
+    if rows:
+        w = csv.DictWriter(buf, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename=keepa-analysis-{aid}.csv"})
 
 
 @app.get("/api/forms/counts")
