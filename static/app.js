@@ -148,6 +148,28 @@ window.addEventListener("hashchange", () => {
 window.addEventListener("beforeunload", (e) => { if (DIRTY) { e.preventDefault(); e.returnValue = ""; } });
 const autoRefresh = (fn, ms = 15000) => { refreshTimer = setInterval(() => { if (!$(".modal-back") && !document.hidden) fn(); }, ms); };
 
+// ---- document preview (price lists & attachments)
+async function previewFile(id, title) {
+  const m = modal(`${mhead("📎 " + esc(title))}<div id="pv-body"><div class="empty">Opening…</div></div>
+    <div class="modal-foot"><a class="btn" href="/api/price-lists/${id}/file" target="_blank">⇩ Download / open in new tab</a><button data-close>Close</button></div>`, { wide: true });
+  const box = $("#pv-body", m);
+  let d;
+  try { d = await api(`/price-lists/${id}/preview`); } catch (e) { box.innerHTML = `<div class="banner bad">${esc(e.message)}</div>`; return; }
+  const table = (rows) => `<div class="pv-table"><table><tbody>${rows.map((r, i) => `<tr>${r.map((c) => i === 0 ? `<th>${esc(c)}</th>` : `<td>${esc(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+  if (d.type === "pdf") box.innerHTML = `<iframe class="pv-frame" src="${d.url}#view=FitH"></iframe>`;
+  else if (d.type === "image") box.innerHTML = `<img src="${d.url}" style="max-width:100%;border-radius:10px">`;
+  else if (d.type === "table" || d.type === "doc") {
+    const sheets = d.sheets || [];
+    box.innerHTML = (d.text ? `<div class="pv-text">${esc(d.text)}</div>` : "") +
+      (sheets.length > 1 ? `<div class="seg" style="margin:10px 0">${sheets.map((sh, i) => `<a href="#" data-sh="${i}" class="${i ? "" : "active"}">${esc(sh.name)}</a>`).join("")}</div>` : "") +
+      `<div id="pv-sheet">${sheets.length ? table(sheets[0].rows) : ""}</div>`;
+    $$("[data-sh]", box).forEach((a) => (a.onclick = (e) => { e.preventDefault(); $$("[data-sh]", box).forEach((x) => x.classList.toggle("active", x === a)); $("#pv-sheet", box).innerHTML = table(sheets[+a.dataset.sh].rows); }));
+  } else if (d.type === "text") box.innerHTML = `<div class="pv-text">${esc(d.text)}</div>`;
+  else if (d.type === "zip") box.innerHTML = `<div class="hint" style="margin-bottom:8px">ZIP archive - ${d.files.length} file(s). Download it to open them.</div>` + table([["File", "Size"], ...d.files.map((f) => [f.name, Math.round(f.size / 1024) + " KB"])]);
+  else if (d.type === "link") { box.innerHTML = `<div class="banner info">This is a link: <a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a></div>`; }
+  else box.innerHTML = `<div class="banner warn">${esc(d.error || "Can't preview this file.")}</div>`;
+}
+
 // ================================================================ HOME
 ROUTES.home = async function (tab = "upcoming") {
   await refreshState();
@@ -290,7 +312,7 @@ async function showReply(id) {
     <div class="card"><h3>Conversation</h3><div class="thread">${m.thread.map((t) => `
       <div class="bubble ${t.direction}"><div class="meta"><b>${t.direction === "out" ? "You" : esc(t.from_addr)}</b><span>${when(t.ts)}</span><span>${esc(t.subject)}</span></div>
       <div class="txt">${esc(t.direction === "in" ? (t.reply_text || t.body) : t.body)}</div>
-      ${(t.files || []).length ? `<div class="files">${t.files.map((f) => f.kind === "file" ? `<a class="pill info" href="/api/price-lists/${f.id}/file" target="_blank">📎 ${esc(f.filename)}</a>` : `<a class="pill info" href="${esc(f.url)}" target="_blank" rel="noopener">🔗 ${esc(f.filename)}</a>`).join(" ")}</div>` : ""}</div>`).join("")}</div></div>
+      ${(t.files || []).length ? `<div class="files">${t.files.map((f) => f.kind === "file" ? `<a class="pill info" href="#" data-pvf="${f.id}" data-name="${esc(f.filename)}">📎 ${esc(f.filename)}</a>` : `<a class="pill info" href="${esc(f.url)}" target="_blank" rel="noopener">🔗 ${esc(f.filename)}</a>`).join(" ")}</div>` : ""}</div>`).join("")}</div></div>
     <div class="card"><div class="card-head"><h2>Answer</h2><div class="right">${fromPill(acc?.email)}</div></div>
       <textarea id="r-text" rows="8" placeholder="Write your answer…"></textarea>
       <div class="row" style="margin-top:10px">
@@ -316,6 +338,7 @@ async function showReply(id) {
       dm.close(); history.replaceState(null, "", "#/replies"); refreshState(); route();
     };
   };
+  $$("[data-pvf]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); previewFile(a.dataset.pvf, a.dataset.name); }));
   const ai = $("#r-ai");
   if (ai) ai.onclick = async () => {
     ai.disabled = true; ai.textContent = "Claude is reading…";

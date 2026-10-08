@@ -1263,6 +1263,66 @@ def price_list_file(pid):
     return send_file(path, mimetype=r["content_type"] or None, as_attachment=not inline, download_name=r["filename"])
 
 
+@app.get("/api/price-lists/<int:pid>/preview")
+def price_list_preview(pid):
+    """What the browser can show: PDFs/images inline, spreadsheets and Word files as tables/text, ZIPs as a file list."""
+    import csv as _csv
+    import zipfile
+    from pathlib import Path
+    r = db.q1("SELECT * FROM price_lists WHERE id=?", (pid,))
+    if not r:
+        abort(404)
+    if r["kind"] == "link":
+        return jsonify({"type": "link", "url": r["url"]})
+    path = Path(r["path"]).resolve()
+    if (db.DATA_DIR / "attachments").resolve() not in path.parents or not path.exists():
+        abort(404)
+    name, ctype = r["filename"].lower(), r["content_type"] or ""
+    url = f"/api/price-lists/{pid}/file"
+    try:
+        if ctype == "application/pdf" or name.endswith(".pdf"):
+            return jsonify({"type": "pdf", "url": url})
+        if ctype.startswith("image/"):
+            return jsonify({"type": "image", "url": url})
+        if name.endswith((".xlsx", ".xlsm")):
+            import openpyxl
+            wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+            sheets = []
+            for ws in wb.worksheets[:8]:
+                rows = []
+                for row in ws.iter_rows(values_only=True):
+                    if len(rows) >= 500:
+                        break
+                    vals = ["" if v is None else str(v) for v in row[:40]]
+                    if any(vals):
+                        rows.append(vals)
+                sheets.append({"name": ws.title, "rows": rows})
+            return jsonify({"type": "table", "sheets": sheets})
+        if name.endswith((".csv", ".txt")) or ctype.startswith("text/"):
+            text = path.read_bytes()[:2_000_000].decode("utf-8", "ignore")
+            if name.endswith(".csv") or ctype == "text/csv":
+                try:
+                    dialect = _csv.Sniffer().sniff(text[:4096], delimiters=",;\t")
+                except Exception:
+                    dialect = _csv.excel
+                rows = [r_[:40] for r_ in list(_csv.reader(text.splitlines(), dialect))[:500]]
+                return jsonify({"type": "table", "sheets": [{"name": r["filename"], "rows": rows}]})
+            return jsonify({"type": "text", "text": text[:200_000]})
+        if name.endswith(".docx"):
+            import docx
+            d = docx.Document(str(path))
+            parts = [p_.text for p_ in d.paragraphs if p_.text.strip()]
+            sheets = [{"name": f"Table {i + 1}", "rows": [[c.text for c in row.cells][:40] for row in t.rows][:500]}
+                      for i, t in enumerate(d.tables[:8])]
+            return jsonify({"type": "doc", "text": "\n".join(parts)[:200_000], "sheets": sheets})
+        if name.endswith(".zip") or ctype == "application/zip":
+            with zipfile.ZipFile(path) as z:
+                return jsonify({"type": "zip", "files": [{"name": i.filename, "size": i.file_size} for i in z.infolist()[:300]]})
+    except Exception as ex:
+        return jsonify({"type": "none", "url": url, "error": f"Can't show this file here ({ex}). Download it instead."})
+    return jsonify({"type": "none", "url": url, "error": "This file type can't be shown in the browser. Download it instead."})
+
+
 @app.post("/api/price-lists/<int:pid>")
 def update_price_list(pid):
     d = body()

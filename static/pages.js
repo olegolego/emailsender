@@ -577,17 +577,19 @@ ROUTES.prices = async function () {
         <div class="frow">
           <div class="fmain">
             <div class="row" style="gap:8px">${kindPill(r)}
-              ${r.kind === "file" ? `<a class="flink" href="/api/price-lists/${r.id}/file" target="_blank">${esc(r.filename)}</a>` : `<a class="flink" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url.length > 70 ? r.url.slice(0, 70) + "…" : r.url)} ↗</a>`}
+              ${r.kind === "file" ? `<a class="flink" href="#" data-pvf="${r.id}" data-name="${esc(r.filename)}">${esc(r.filename)}</a>` : `<a class="flink" href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url.length > 70 ? r.url.slice(0, 70) + "…" : r.url)} ↗</a>`}
               <span class="muted" style="font-size:12.5px">${size(r.size)}</span></div>
             <div class="muted" style="font-size:12.5px;margin-top:3px">${esc(r.from_name || r.from_addr || "")}${r.domain ? " · " + esc(r.domain) : ""} · ${when(r.received_at)} · “${esc(r.subject || "")}”</div>
             <div class="note fnote" data-plnote="${r.id}">${r.notes ? esc(r.notes) : '<span class="muted">+ Add note</span>'}</div>
           </div>
           <div class="fact">
+            ${r.kind === "file" ? `<button class="sm primary" data-pvf="${r.id}" data-name="${esc(r.filename)}">👁 Preview</button>` : ""}
             ${r.message_row_id ? `<a class="btn sm ghost" href="#/replies/${r.message_row_id}">Conversation</a>` : ""}
             ${r.status === "new" ? `<button class="sm" data-pls="${r.id}" data-v="reviewed">✓ Reviewed</button><button class="sm ghost" data-pls="${r.id}" data-v="not_price_list">Not a price list</button>` : `<button class="sm ghost" data-pls="${r.id}" data-v="new">↺ Mark new</button>`}
           </div>
         </div>`).join("")}</div>` : `<div class="empty">${st.status === "new" ? "No new price lists. When a supplier sends a file or a price-list link, it shows up here." : "Nothing here."}</div>`}</div>`;
     $$("[data-pl]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); st.status = a.dataset.pl; sessionStorage.setItem("pls", st.status); load(); }));
+    $$("[data-pvf]").forEach((a) => (a.onclick = (e) => { e.preventDefault(); previewFile(a.dataset.pvf, a.dataset.name); }));
     $$("[data-pls]").forEach((b) => (b.onclick = async () => { await act(() => api(`/price-lists/${b.dataset.pls}`, "POST", { status: b.dataset.v }), "Updated"); refreshState(); load(); }));
     const byId = Object.fromEntries(d.rows.map((r) => [r.id, r]));
     $$("[data-plnote]").forEach((td) => (td.onclick = () => {

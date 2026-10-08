@@ -3,3 +3,5 @@ anthropic>=1.11
 keyring>=25
 waitress>=3
 dnspython>=2.6
+openpyxl>=3.1
+python-docx>=1.1

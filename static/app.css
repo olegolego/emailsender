@@ -182,6 +182,13 @@ td.note:hover { background: var(--soft); }
 
 .files { margin-top: 8px; display: flex; gap: 6px; flex-wrap: wrap; }
 
+.pv-frame { width: 100%; height: 72vh; border: 1px solid var(--line); border-radius: 10px; }
+.pv-table { max-height: 66vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.pv-table table { font-size: 12.5px; }
+.pv-table th { position: sticky; top: 0; background: var(--soft); color: var(--ink); font-weight: 600; }
+.pv-table td, .pv-table th { padding: 6px 9px; white-space: nowrap; max-width: 360px; overflow: hidden; text-overflow: ellipsis; }
+.pv-text { white-space: pre-wrap; max-height: 40vh; overflow: auto; background: var(--soft); border-radius: 10px; padding: 12px 14px; font-size: 13.5px; }
+
 /* batch cards */
 .bcard { display: block; color: inherit; border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; background: #fff; box-shadow: var(--shadow-sm); transition: box-shadow .15s, border-color .15s; }
 .bcard:hover { text-decoration: none; border-color: var(--line-2); box-shadow: var(--shadow); }
