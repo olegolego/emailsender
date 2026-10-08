@@ -324,6 +324,61 @@ def batch_sent_today(batch_id):
                      (batch_id, db.iso(start), db.iso(end))) or 0
 
 
+def space_out(account_id):
+    """Gives every pending email of a mailbox a realistic slot: 'gap ± 30 s' after the previous one, inside its batch's
+    send window, and no more per day than the mailbox (and batch) daily limits. The Outbox then shows real times."""
+    acc = db.q1("SELECT * FROM accounts WHERE id=?", (account_id,))
+    if not acc:
+        return
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(db.get_setting("timezone") or "America/Detroit")
+    day_of = lambda t: t.astimezone(tz).date()
+    base_gap = float(acc["min_gap_minutes"] or 0) * 60
+    limit = int(acc["daily_limit"] or 0) or 10 ** 6
+    now = db.utcnow()
+    sent_per_day, batch_sent_per_day = {}, {}
+    for r in db.q("SELECT m.ts, e.batch_id FROM messages m LEFT JOIN enrollments e ON e.id=m.enrollment_id "
+                  "WHERE m.direction='out' AND m.account_id=? AND m.ts>=?", (account_id, db.days_ago_iso(2))):
+        d = day_of(db.parse_iso(r["ts"]))
+        sent_per_day[d] = sent_per_day.get(d, 0) + 1
+        if r["batch_id"]:
+            batch_sent_per_day[(r["batch_id"], d)] = batch_sent_per_day.get((r["batch_id"], d), 0) + 1
+    last = db.scalar("SELECT MAX(ts) FROM messages WHERE direction='out' AND account_id=?", (account_id,))
+    prev = db.parse_iso(last) if last else None
+    items = db.q("SELECT q.*, e.batch_id FROM queue q LEFT JOIN enrollments e ON e.id=q.enrollment_id "
+                 "WHERE q.account_id=? AND q.status='pending' ORDER BY q.scheduled_at, q.id", (account_id,))
+    pipelines, updates = {}, []
+    for it in items:
+        t = max(db.parse_iso(it["scheduled_at"]), now)
+        if prev is not None:
+            t = max(t, prev + timedelta(seconds=max(0.0, base_gap + random.uniform(-30, 30)) if base_gap else 0))
+        ws, c, cap = None, None, 0
+        if it["respect_window"] and it["pipeline_id"]:
+            p = pipelines.get(it["pipeline_id"]) or pipelines.setdefault(it["pipeline_id"], load_pipeline(it["pipeline_id"]))
+            ws = window_settings(p, it["enrollment_id"])
+            c = db.q1("SELECT timezone FROM contacts WHERE id=?", (it["contact_id"],))
+            cap = int(batch_settings(it["enrollment_id"]).get("daily_limit") or 0)
+        for _ in range(60):
+            if ws:
+                t = schedule.next_window_time(t, ws, c)
+            d = day_of(t)
+            full = sent_per_day.get(d, 0) >= limit or (cap and it["batch_id"] and
+                                                         batch_sent_per_day.get((it["batch_id"], d), 0) >= cap)
+            if not full:
+                break
+            nxt = datetime.combine(d + timedelta(days=1), datetime.min.time(), tzinfo=tz)
+            t = nxt.astimezone(timezone.utc)
+        d = day_of(t)
+        sent_per_day[d] = sent_per_day.get(d, 0) + 1
+        if it["batch_id"]:
+            batch_sent_per_day[(it["batch_id"], d)] = batch_sent_per_day.get((it["batch_id"], d), 0) + 1
+        prev = t.replace(microsecond=0)
+        updates.append((db.iso(prev), it["id"]))
+    with db.transaction() as cx:
+        cx.executemany("UPDATE queue SET scheduled_at=? WHERE id=?", updates)
+    return len(updates)
+
+
 def queue_step(e, p, node):
     c = db.q1("SELECT * FROM contacts WHERE id=?", (e["contact_id"],))
     if not c or c["status"] in SUPPRESSED:
@@ -348,6 +403,7 @@ def queue_step(e, p, node):
                     "needs_approval" if reasons else "pending", "; ".join(reasons), db.now_iso()))
         cx.execute("UPDATE enrollments SET phase='queued', next_action_at=NULL, updated_at=? WHERE id=?",
                    (db.now_iso(), e["id"]))
+    space_out(e["account_id"])
     if reasons:
         notify("approval", "Email waiting for your approval",
                f"{c['email']} · {node.get('name') or node['id']} · {reasons[0]}", "#/queue/needs_approval", "warning")

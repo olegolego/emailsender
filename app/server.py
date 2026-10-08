@@ -186,6 +186,7 @@ def create_account():
 def update_account(aid):
     d = body()
     db.update("accounts", aid, {k: d[k] for k in ACCOUNT_FIELDS if k in d})
+    engine.space_out(aid)
     if d.get("password"):
         secrets.set_secret(f"account:{aid}", d["password"].replace(" ", ""))
     return ok()
@@ -638,6 +639,7 @@ def queue_action(qid):
             return jsonify({"ok": False, "error": db.scalar("SELECT error FROM queue WHERE id=?", (qid,)) or "Not sent"}), 400
     elif a == "approve":
         db.update("queue", qid, {"status": "pending", "approval_reason": ""})
+        engine.space_out(item["account_id"])
         worker.wake()
     elif a == "cancel":
         db.update("queue", qid, {"status": "cancelled", "error": "skipped by me"})
@@ -1142,6 +1144,9 @@ def _clean_batch_settings(st):
 @app.post("/api/batches/<int:bid>/settings")
 def batch_settings(bid):
     db.update("batches", bid, {"settings": json.dumps(_clean_batch_settings(body()))})
+    b = db.q1("SELECT account_id FROM batches WHERE id=?", (bid,))
+    if b and b["account_id"]:
+        engine.space_out(b["account_id"])
     worker.wake()
     return ok()
 
@@ -1268,6 +1273,8 @@ def batch_action(bid):
                 db.execute("UPDATE queue SET status='pending', approval_reason='' WHERE enrollment_id=? "
                            "AND status='needs_approval' AND approval_reason IN ('batch paused','enrollment paused')", (e["id"],))
         db.update("batches", bid, {"status": "running"})
+        for acc in db.q("SELECT id FROM accounts"):
+            engine.space_out(acc["id"])
     elif a == "stop":
         for e in rows:
             if e["state"] in ("active", "paused"):
