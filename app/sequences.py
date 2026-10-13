@@ -319,7 +319,8 @@ def recipient_status(e, steps, now_iso):
         out.update(kind="info", text=f"{label} sent · {'follow-up' if more else 'finishes'} if no reply",
                    next_at=e["next_action_at"])
     else:
-        out.update(kind="info", text=f"{label} being prepared", next_at=e["next_action_at"])
+        # the worker gives it a real send slot within a few seconds - don't show the batch start time as if it were one
+        out.update(kind="info", text=f"{label}: getting queued…", next_at=None)
     out["step"] = idx + 1
     out["steps"] = len(steps)
     return out
