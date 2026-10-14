@@ -41,6 +41,7 @@ def close_db(exc):
 @app.errorhandler(ValueError)
 @app.errorhandler(RuntimeError)
 @app.errorhandler(mailer.MailError)
+@app.errorhandler(keepa.KeepaError)
 def value_error(e):
     return jsonify({"ok": False, "error": str(e)}), 400
 
@@ -1388,8 +1389,16 @@ def get_analysis(aid):
 def analysis_rerun(aid):
     if not secrets.has_secret("keepa_api_key"):
         raise ValueError("Add your Keepa API key in Settings first.")
-    keepa.rerun_keepa(aid)
+    keepa.token_status(secrets.get_secret("keepa_api_key"))  # fail fast with Keepa's own reason (plan, tokens)
+    keepa.rerun_keepa(aid, by_name=bool(body().get("by_name")))
     return ok()
+
+
+@app.post("/api/keepa/test")
+def keepa_test():
+    if not secrets.has_secret("keepa_api_key"):
+        raise ValueError("No Keepa key saved yet.")
+    return ok(**keepa.token_status(secrets.get_secret("keepa_api_key")))
 
 
 @app.post("/api/analyses/<int:aid>/by-name")

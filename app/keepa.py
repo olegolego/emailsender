@@ -328,18 +328,51 @@ def _at(arr, i):
     return arr[i] if arr and len(arr) > i and arr[i] is not None else -1
 
 
-def keepa_lookup(codes, key):
-    """Returns (products_by_code, tokens_consumed, tokens_left)."""
-    q = urllib.parse.urlencode({"key": key, "domain": DOMAIN_US, "code": ",".join(codes), "stats": 90, "history": 0})
-    req = urllib.request.Request(f"{KEEPA_URL}?{q}", headers={"Accept-Encoding": "gzip"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        raw = r.read()
-        if r.headers.get("Content-Encoding") == "gzip":
-            import gzip
+class KeepaError(RuntimeError):
+    pass
+
+
+def _keepa_get(path, params):
+    import gzip
+    import urllib.error
+    q = urllib.parse.urlencode(params)
+    req = urllib.request.Request(f"https://api.keepa.com/{path}?{q}", headers={"Accept-Encoding": "gzip"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            raw = r.read()
+            if r.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+    except urllib.error.HTTPError as e:
+        raw = e.read()
+        try:
             raw = gzip.decompress(raw)
+        except Exception:
+            pass
+        try:
+            data = json.loads(raw)
+        except Exception:
+            raise KeepaError(f"Keepa answered HTTP {e.code}")
+        msg = (data.get("error") or {}).get("message") or f"HTTP {e.code}"
+        if "No active API plan" in msg:
+            msg = "Keepa says there is no active API plan on this key. API access is a separate subscription: keepa.com → API."
+        elif e.code == 429 or "token" in msg.lower():
+            msg = f"Keepa: not enough tokens right now ({data.get('tokensLeft')} left, refill in {round((data.get('refillIn') or 0) / 1000)} s)."
+        raise KeepaError(msg)
     data = json.loads(raw)
     if data.get("error"):
-        raise RuntimeError(f"Keepa: {data['error'].get('message') or data['error']}")
+        raise KeepaError(f"Keepa: {data['error'].get('message') or data['error']}")
+    return data
+
+
+def token_status(key):
+    """Free call: plan / tokens left."""
+    d = _keepa_get("token", {"key": key})
+    return {"tokens_left": d.get("tokensLeft"), "refill_rate": d.get("refillRate"), "refill_in_s": round((d.get("refillIn") or 0) / 1000)}
+
+
+def keepa_lookup(codes, key):
+    """Returns (products_by_code, tokens_consumed, tokens_left)."""
+    data = _keepa_get("product", {"key": key, "domain": DOMAIN_US, "code": ",".join(codes), "stats": 90, "history": 0})
     by_code = {}
     for p in data.get("products") or []:
         for c in (p.get("upcList") or []) + (p.get("eanList") or []):
@@ -349,16 +382,7 @@ def keepa_lookup(codes, key):
 
 def keepa_search(term, key):
     """Keepa product search (path 'search', type=product) - first page, with 90-day stats. Returns (products, used, left)."""
-    q = urllib.parse.urlencode({"key": key, "domain": DOMAIN_US, "type": "product", "term": term, "stats": 90, "page": 0})
-    req = urllib.request.Request(f"https://api.keepa.com/search?{q}", headers={"Accept-Encoding": "gzip"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        raw = r.read()
-        if r.headers.get("Content-Encoding") == "gzip":
-            import gzip
-            raw = gzip.decompress(raw)
-    data = json.loads(raw)
-    if data.get("error"):
-        raise RuntimeError(f"Keepa: {data['error'].get('message') or data['error']}")
+    data = _keepa_get("search", {"key": key, "domain": DOMAIN_US, "type": "product", "term": term, "stats": 90, "page": 0})
     return data.get("products") or [], data.get("tokensConsumed", 0), data.get("tokensLeft")
 
 
@@ -449,8 +473,8 @@ def _upd(aid, **kw):
     db.update("analyses", aid, kw)
 
 
-def run(aid):
-    """Background job: extract (free or Haiku) -> Keepa -> profit. Safe to call again to re-run Keepa only."""
+def run(aid, by_name=False):
+    """Background job: extract (free or Haiku) -> Keepa by barcode -> (optionally) by name -> profit."""
     init()
     a = db.q1("SELECT * FROM analyses WHERE id=?", (aid,))
     pl = db.q1("SELECT * FROM price_lists WHERE id=?", (a["price_list_id"],))
@@ -510,7 +534,11 @@ def run(aid):
                 cx.execute(f"UPDATE analysis_items SET {','.join(f + '=?' for f in fields)} WHERE id=?",
                            [ev.get(f) for f in fields] + [it["id"]])
         _upd(aid, status="done", found=found, keepa_tokens=used, keepa_tokens_left=left,
-             message=f"Found {found} of {len(codes)} items on Amazon.")
+             message=f"Found {found} of {len(codes)} items on Amazon by barcode." if codes else "This list has no barcodes.")
+        if by_name and db.scalar("SELECT COUNT(*) FROM analysis_items WHERE analysis_id=? AND status IN ('no_code','not_found') "
+                                 "AND name<>''", (aid,)):
+            run_by_name(aid)
+            return
     except Exception as ex:
         traceback.print_exc()
         _upd(aid, status="error", message=str(ex)[:500])
@@ -529,5 +557,5 @@ def start(price_list_id):
     return aid
 
 
-def rerun_keepa(aid):
-    threading.Thread(target=run, args=(aid,), daemon=True, name=f"analysis-{aid}").start()
+def rerun_keepa(aid, by_name=False):
+    threading.Thread(target=run, args=(aid, by_name), daemon=True, name=f"analysis-{aid}").start()

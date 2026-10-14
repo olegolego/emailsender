@@ -637,10 +637,10 @@ ROUTES.analysis = async function (id) {
     page().innerHTML = `
       <a class="back" href="#/prices">← Price lists</a>
       <div class="head"><div><h1>📊 ${esc(a.title)}</h1><div class="sub">${esc(a.price_list?.domain || a.price_list?.from_addr || a.price_list?.notes || "")}${a.method ? " · items read by " + esc(a.method) : ""}${a.ai_cost ? ` · AI cost $${a.ai_cost.toFixed(3)}` : ""}</div></div>
-        <div class="actions">${(a.status === "needs_key" || a.status === "done" || a.status === "error") && a.with_code ? `<button id="an-keepa">${a.status === "done" ? "↻ Re-run Keepa" : "▶ Run Keepa (by barcode)"}</button>` : ""}
-          ${!running && a.items.some((x) => x.status === "no_code" || x.status === "not_found") ? `<button id="an-name" title="Uses Keepa product search - more tokens per item">🔎 Find ${a.items.filter((x) => x.status === "no_code" || x.status === "not_found").length} by name</button>` : ""}
+        <div class="actions">${!running ? `<button class="primary" id="an-keepa">${a.found ? "↻ Re-run Keepa" : "▶ Run Keepa"}</button>` : ""}
           <a class="btn" href="/api/analyses/${a.id}/export.csv">⇩ Export CSV</a></div></div>
-      ${a.message ? `<div class="banner ${a.status === "error" ? "bad" : a.status === "needs_key" ? "warn" : running ? "info" : "good"}">${running ? "⏳ " : ""}${esc(a.message)}${a.status === "needs_key" ? ` <a class="right btn sm" href="#/settings">Add Keepa key</a>` : ""}</div>` : ""}
+      ${a.status === "needs_key" && a.keepa_key_set ? `<div class="banner info">Items are ready. Your Keepa key is saved - press <b>▶ Run Keepa</b>.</div>`
+        : a.message ? `<div class="banner ${a.status === "error" ? "bad" : a.status === "needs_key" ? "warn" : running ? "info" : "good"}">${running ? "⏳ " : ""}${esc(a.message)}${a.status === "needs_key" ? ` <a class="right btn sm" href="#/settings">Add Keepa key</a>` : ""}</div>` : ""}
       <div class="tiles">
         <div class="tile"><div class="l">Items in the list</div><div class="v">${a.item_count}</div><div class="h">${a.with_code} with UPC/EAN</div></div>
         <div class="tile"><div class="l">Found on Amazon</div><div class="v">${a.found}</div><div class="h">${a.keepa_tokens ? a.keepa_tokens + " Keepa tokens used" : "not looked up yet"}${a.keepa_tokens_left != null ? " · " + a.keepa_tokens_left + " left" : ""}</div></div>
@@ -668,9 +668,13 @@ ROUTES.analysis = async function (id) {
     $$("[data-af]").forEach((x) => (x.onclick = (e) => { e.preventDefault(); st.f = x.dataset.af; sessionStorage.setItem("anf", st.f); draw(a); }));
     $("#an-sort").onchange = (e) => { st.sort = e.target.value; sessionStorage.setItem("ans", st.sort); draw(a); };
     const kb = $("#an-keepa");
-    if (kb) kb.onclick = async () => { await act(() => api(`/analyses/${a.id}/keepa`, "POST"), "Looking up on Keepa…"); load(); };
-    const nb = $("#an-name");
-    if (nb) nb.onclick = async () => { if (!confirm("Search these items on Keepa by name? Each search uses more Keepa tokens than a barcode lookup.")) return; await act(() => api(`/analyses/${a.id}/by-name`, "POST"), "Searching by name…"); load(); };
+    if (kb) kb.onclick = async () => {
+      const withCode = a.items.filter((x) => x.code).length, noCode = a.items.filter((x) => !x.code || x.status === "not_found").length;
+      let byName = false;
+      if (noCode) byName = confirm(`${withCode ? withCode + " item(s) will be looked up by barcode (about 1 Keepa token each).\n\n" : ""}${noCode} item(s) have no barcode${withCode ? " or weren't found" : ""}. Also search them on Keepa by name?\nName searches use more tokens and need a check (size / variant).`);
+      if (!withCode && !byName) return;
+      await act(() => api(`/analyses/${a.id}/keepa`, "POST", { by_name: byName }), "Looking up on Keepa…"); load();
+    };
     if (running) { clearTimeout(window.__anT); window.__anT = setTimeout(load, 2500); }
   };
   const load = async () => { if (!location.hash.startsWith("#/analysis/" + id)) return; draw(await api("/analyses/" + id)); };
@@ -713,7 +717,7 @@ ROUTES.settings = async function () {
 
     <div class="card"><h2 style="margin-bottom:12px">Keepa (Amazon data for price-list analysis)</h2>
       <div class="row"><input type="password" id="kp-key" style="min-width:340px" placeholder="${s.keepa_key_set ? "Keepa key saved ✓ (paste to replace)" : "Keepa API key"}">
-        <button id="kp-save">Save key</button>
+        <button id="kp-save">Save key</button><button class="ghost" id="kp-test">Test key</button><span class="hint" id="kp-out"></span>
         <label class="field" style="margin-left:16px"><span>Good item = ROI at least (%)</span><input type="number" data-k="min_roi" value="${s.min_roi ?? 30}" style="width:90px"></label></div>
       <div class="hint" style="margin-top:6px">Get it at keepa.com → API (paid plan). Each looked-up item costs about 1 Keepa token. Price lists are read for free when they're spreadsheets with clear columns; otherwise Claude Haiku 4.5 (the cheapest model) reads them - usually a few cents per list.</div></div>
 
@@ -725,6 +729,7 @@ ROUTES.settings = async function () {
   const save = (k, v) => act(() => api("/settings", "POST", { [k]: v }), "Saved").then(refreshState);
   $$("[data-k]").forEach((el) => (el.onchange = () => save(el.dataset.k, el.type === "checkbox" ? el.checked : el.value)));
   $("#n-test").onclick = () => act(() => api("/notifications/test", "POST"), "Sent - check your Mac");
+  $("#kp-test").onclick = async () => { $("#kp-out").textContent = "Checking…"; try { const r = await api("/keepa/test", "POST"); $("#kp-out").textContent = `✓ Plan active · ${r.tokens_left} tokens left · refills ${r.refill_rate}/min`; } catch (e) { $("#kp-out").textContent = "✗ " + e.message; } };
   $("#kp-save").onclick = async () => { const v = $("#kp-key").value.trim(); if (!v) return toast("Paste the Keepa key first"); await act(() => api("/settings", "POST", { keepa_api_key: v }), "Keepa key saved"); ROUTES.settings(); };
   $("#ai-save").onclick = async () => { const v = $("#ai-key").value.trim(); if (!v) return toast("Paste a key first"); await act(() => api("/settings", "POST", { anthropic_api_key: v }), "Key saved"); ROUTES.settings(); };
   $("#ai-test").onclick = async () => { $("#ai-out").textContent = "Asking Claude…"; try { const r = await api("/settings/test-ai", "POST"); $("#ai-out").textContent = `✓ ${r.analysis.category}: ${r.analysis.summary}`; } catch (e) { $("#ai-out").textContent = "✗ " + e.message; } };
