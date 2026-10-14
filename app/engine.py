@@ -816,8 +816,15 @@ def process_inbound(account, raw, folder):
     })
     db.log_event("received", contact["id"] if contact else None, enrollment["id"] if enrollment else None, row_id,
                  p["subject"])
-    save_price_lists(row_id, p, contact)
+    found_files = save_price_lists(row_id, p, contact)
     analyze_and_route(row_id)
+    # supplier pointed to their website / catalog instead of attaching a file -> go look for a price list (free, no AI)
+    if contact and not found_files and not p["is_bounce"]:
+        from . import crawler
+        cat = db.scalar("SELECT category FROM messages WHERE id=?", (row_id,))
+        if cat not in ("unsubscribe", "bounce", "out_of_office", "auto_reply", "not_interested") and \
+                crawler.mentions_catalog(p["reply_text"] or p["body"]):
+            crawler.start(row_id)
     return row_id
 
 

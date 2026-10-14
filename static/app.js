@@ -298,6 +298,7 @@ async function showReply(id) {
       <div class="row"><div class="grow"><h2>${esc(m.from_name || m.from_addr)}</h2>
         <div class="muted" style="font-size:13px">${esc(m.from_addr)}${m.contact?.company ? " · " + esc(m.contact.company) : ""} · ${when(m.ts)}</div></div>
         ${m.handled ? `<button class="sm" id="r-undo">Mark as new</button>` : `<button class="sm" id="r-done">✓ Mark as done</button>`}
+        <button class="sm" id="r-find" title="Visit their website and download any price list (free)">🔎 Find price list on their site</button>
         <button class="sm ghost danger" id="r-del">Delete</button></div>
       <div class="ai" style="margin-top:16px">
         <div class="row" style="gap:8px">${catPill(m.category)}${a.interest_score != null ? `<span class="muted" style="font-size:13px">Interest</span><span class="meter"><i style="width:${a.interest_score}%"></i></span><b class="num" style="font-size:13px">${a.interest_score}</b>` : ""}
@@ -324,6 +325,11 @@ async function showReply(id) {
   const dn = $("#r-done"), un = $("#r-undo");
   if (dn) dn.onclick = () => mark(true);
   if (un) un.onclick = () => mark(false);
+  $("#r-find").onclick = async (e) => {
+    e.target.disabled = true; e.target.textContent = "Looking…";
+    await act(() => api(`/messages/${id}/find-price-list`, "POST"), "Checking their website - results appear in Price lists in a minute");
+    setTimeout(() => { e.target.disabled = false; e.target.textContent = "🔎 Find price list on their site"; refreshState(); }, 30000);
+  };
   $("#r-del").onclick = () => {
     const stopped = m.enrollment && ["replied", "stopped"].includes(m.enrollment.state) && /^reply/.test(m.enrollment.stopped_reason || "");
     const firstContact = !m.replied_to_id;

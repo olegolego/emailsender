@@ -817,6 +817,13 @@ def set_ignored_senders():
     return ok()
 
 
+@app.post("/api/messages/<int:mid>/find-price-list")
+def find_price_list(mid):
+    from . import crawler
+    crawler.start(mid)
+    return ok()
+
+
 @app.post("/api/messages/<int:mid>/analyze")
 def reanalyze(mid):
     if not analyzer.ai_available():
